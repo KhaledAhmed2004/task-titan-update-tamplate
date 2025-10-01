@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stripe Payment Test - Task Titans</title>
+    <script src="https://js.stripe.com/v3/"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .payment-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .payment-info h3 {
+            margin: 0 0 10px 0;
+            color: #1976d2;
+        }
+        .info-item {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        #card-element {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+        }
+        #card-errors {
+            color: #fa755a;
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .load-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-bottom: 20px;
+            width: 100%;
+            transition: background-color 0.3s;
+        }
+        .load-btn:hover {
+            background: #45a049;
+        }
+        .load-btn:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        input[type="number"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .dynamic-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            border-left: 4px solid #28a745;
+        }
+        #submit-button {
+            background: #1976d2;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+        }
+        #submit-button:hover:not(:disabled) {
+            background: #1565c0;
+        }
+        #submit-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 6px;
+            display: none;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .test-cards {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #ffeaa7;
+        }
+        .test-cards h4 {
+            margin: 0 0 10px 0;
+            color: #856404;
+        }
+        .test-cards ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .test-cards li {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔒 Stripe Payment Test</h1>
+        
+        <div class="payment-info">
+            <h3>💳 Payment Details</h3>
+            <div class="info-item"><strong>Client Secret:</strong> <span id="client-secret-display">Enter client secret above</span></div>
+            <div class="info-item"><strong>Status:</strong> <span id="payment-status">Ready to pay</span></div>
+        </div>
+
+        <div class="test-cards">
+            <h4>🧪 Test Card Numbers</h4>
+            <ul>
+                <li><strong>Success:</strong> 4242 4242 4242 4242</li>
+                <li><strong>Declined:</strong> 4000 0000 0000 0002</li>
+                <li><strong>Insufficient Funds:</strong> 4000 0000 0000 9995</li>
+                <li><strong>3D Secure:</strong> 4000 0000 0000 3220</li>
+            </ul>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #856404;">Use any future expiry date, any 3-digit CVC, and any postal code.</p>
+        </div>
+
+        <form id="payment-form">
+            <div class="form-group">
+                <label for="client-secret">🔐 Client Secret:</label>
+                <input type="text" id="client-secret" placeholder="pi_3SDDe2Lje7aworqD24giXEgC_secret_..." required>
+                <small style="color: #666; font-size: 12px;">
+                    💡 শুধুমাত্র Client Secret দিয়েই payment করতে পারবেন
+                </small>
+            </div>
+
+            <div class="form-group">
+                <label for="card-element">💳 Card Information:</label>
+                <div id="card-element">
+                    <!-- Stripe Elements will create form elements here -->
+                </div>
+                <div id="card-errors" role="alert"></div>
+            </div>
+
+            <button type="submit" id="submit-button">🔒 Confirm Payment</button>
+        </form>
+
+        <div id="payment-result" class="result">
+            <div id="payment-message"></div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Stripe (use your publishable key)
+        const stripe = Stripe('pk_test_51RzPsELje7aworqDsz57lVuTN8DGxH6isrNX2EDOxMmkZfYBciS7ckmSGwSRc6MEg1oOt2sl9vnV1QSJfvMUTzDs00mHWdBTLM');
+        const elements = stripe.elements();
+
+        // Create card element
+        const cardElement = elements.create('card', {
+            style: {
+                base: {
+                    fontSize: '16px',
+                    color: '#424770',
+                    '::placeholder': {
+                        color: '#aab7c4',
+                    },
+                },
+            },
+        });
+
+        cardElement.mount('#card-element');
+
+        // Handle real-time validation errors from the card Element
+        cardElement.on('change', ({error}) => {
+            const displayError = document.getElementById('card-errors');
+            if (error) {
+                displayError.textContent = error.message;
+            } else {
+                displayError.textContent = '';
+            }
+        });
+
+        // Get DOM elements
+        const form = document.getElementById('payment-form');
+        const submitButton = document.getElementById('submit-button');
+        const clientSecretInput = document.getElementById('client-secret');
+        const clientSecretDisplay = document.getElementById('client-secret-display');
+        const paymentStatus = document.getElementById('payment-status');
+        const resultDiv = document.getElementById('payment-result');
+        const messageDiv = document.getElementById('payment-message');
+
+        // Update client secret display when input changes
+        clientSecretInput.addEventListener('input', function() {
+            const clientSecret = this.value.trim();
+            if (clientSecret) {
+                clientSecretDisplay.textContent = clientSecret.substring(0, 30) + '...';
+                paymentStatus.textContent = 'Ready to pay';
+            } else {
+                clientSecretDisplay.textContent = 'Enter client secret above';
+                paymentStatus.textContent = 'Waiting for client secret';
+            }
+        });
+
+        // Handle form submission
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const clientSecret = clientSecretInput.value.trim();
+            
+            if (!clientSecret) {
+                showMessage('❌ Client Secret প্রয়োজন!', 'error');
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = '⏳ Processing Payment...';
+            paymentStatus.textContent = 'Processing...';
+
+            try {
+                const {error, paymentIntent} = await stripe.confirmCardPayment(clientSecret, {
+                    payment_method: {
+                        card: cardElement,
+                        billing_details: {
+                            name: 'Test User',
+                            email: 'test@example.com'
+                        }
+                    }
+                });
+
+                if (error) {
+                    showMessage(`❌ Payment failed: ${error.message}`, 'error');
+                    paymentStatus.textContent = 'Payment failed';
+                    console.error('Payment error:', error);
+                } else {
+                    showMessage(`
+                        ✅ Payment Successful! 🎉<br>
+                        <strong>Payment ID:</strong> ${paymentIntent.id}<br>
+                        <strong>Amount:</strong> $${(paymentIntent.amount / 100).toFixed(2)}<br>
+                        <strong>Status:</strong> ${paymentIntent.status}<br>
+                        <br>
+                        🔄 Webhook is processing... Check server logs!
+                    `, 'success');
+                    paymentStatus.textContent = 'Payment successful';
+                    console.log('Payment succeeded:', paymentIntent);
+                    
+                    // Reset form after successful payment
+                    setTimeout(() => {
+                        resetForm();
+                    }, 5000);
+                }
+            } catch (err) {
+                showMessage(`❌ An error occurred: ${err.message}`, 'error');
+                paymentStatus.textContent = 'Error occurred';
+                console.error('Error:', err);
+            }
+
+            submitButton.disabled = false;
+            submitButton.textContent = '🔒 Confirm Payment';
+        });
+
+        // Reset form function
+        function resetForm() {
+            form.reset();
+            clientSecretDisplay.textContent = 'Enter client secret above';
+            paymentStatus.textContent = 'Ready to pay';
+            showMessage('🔄 Form reset. Enter new client secret.', 'success');
+        }
+
+        function showMessage(message, type) {
+            messageDiv.innerHTML = message;
+            resultDiv.className = `result ${type}`;
+            resultDiv.style.display = 'block';
+            
+            // Auto-hide success messages after 5 seconds
+            if (type === 'success') {
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        // Auto-focus on client secret input
+        clientSecretInput.focus();
+
+        // Initial message
+        showMessage('💡 Enter client secret and click "Confirm Payment" to proceed.', 'success');
+    </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+export interface IHomePageEdit {
+  _id?: string;
+  subHeader?: string;
+  header: string;
+  description?: string;
+  rating?: string;
+  responseTime: string;
+//   bannerImagesUrl: string;
+  image: string[];
+  activeUser: string;
+  paidToTitans: string;
+  successRate: string;
+  userRating: string;
+  howItWorksHeading1: string;
+  howItWorksSubheading1: string;
+  howItWorksIcon1: string;
+  howItWorksHeading2: string;
+  howItWorksSubheading2: string;
+  howItWorksIcon2: string;
+  howItWorksHeading3: string;
+  howItWorksSubheading3: string;
+  howItWorksIcon3: string;
+  whyChooseUsHeading1: string;
+  whyChooseUsSubheading1: string;
+  whyChooseUsIcon1: string;
+  whyChooseUsHeading2: string;
+  whyChooseUsSubheading2: string;
+  whyChooseUsIcon2: string;
+  whyChooseUsHeading3: string;
+  whyChooseUsSubheading3: string;
+  whyChooseUsIcon3: string;
+  whyChooseUsHeading4: string;
+  whyChooseUsSubheading4: string;
+  whyChooseUsIcon4: string;
+}

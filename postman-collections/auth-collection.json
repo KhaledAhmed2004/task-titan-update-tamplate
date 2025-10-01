@@ -1,0 +1,35 @@
+{
+  "info": {
+    "name": "Auth Collection",
+    "description": "Authentication endpoints for the Task Titans application",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:5000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64",
+      "value": "your_firebase_service_account_key_base64_here",
+      "type": "string"
+    },
+    {
+      "key": "STRIPE_SECRET_KEY",
+      "value": "your_stripe_secret_key_here",
+      "type": "string"
+    },
+    {
+      "key": "STRIPE_PUBLISHABLE_KEY",
+      "value": "your_stripe_publishable_key_here",
+      "type": "string"
+    },
+    {
+      "key": "STRIPE_WEBHOOK_SECRET",
+      "value": "your_stripe_webhook_secret_here",
+      "type": "string"
+    }
+  ],
+  "item": []
+}
