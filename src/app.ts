@@ -248,7 +248,17 @@ app.options(
 // -------------------
 // Body parser
 // -------------------
-app.use(express.json());
+// Special handling for webhook routes - they need raw body for signature verification
+app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
+
+// For all other routes, use JSON parsing
+app.use((req, res, next) => {
+  if (req.path.includes('/webhook')) {
+    return next(); // Skip JSON parsing for webhook routes
+  }
+  express.json()(req, res, next);
+});
+
 app.use(express.urlencoded({ extended: true }));
 
 // -------------------

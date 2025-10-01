@@ -6,29 +6,53 @@ import { stripe } from '../../../config/stripe';
 class WebhookController {
   // Handle Stripe webhook events
   handleStripeWebhook = async (req: Request, res: Response) => {
+    // Enhanced logging for debugging
+    console.log('🔔 WEBHOOK RECEIVED:', {
+      timestamp: new Date().toISOString(),
+      headers: {
+        'stripe-signature': req.headers['stripe-signature'] ? 'Present' : 'Missing',
+        'content-type': req.headers['content-type'],
+        'user-agent': req.headers['user-agent'],
+      },
+      bodySize: req.body ? req.body.length : 0,
+      rawBody: req.body ? req.body.toString().substring(0, 200) + '...' : 'No body'
+    });
+
     const sig = req.headers['stripe-signature'] as string;
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     if (!endpointSecret) {
-      console.error('Stripe webhook secret not configured');
+      console.error('❌ Stripe webhook secret not configured');
       return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({
         error: 'Webhook secret not configured',
       });
     }
+
+    console.log('🔐 Webhook secret configured:', endpointSecret.substring(0, 10) + '...');
 
     let event;
 
     try {
       // Verify webhook signature
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+      console.log('✅ Webhook signature verified successfully');
     } catch (err: any) {
-      console.log(`Webhook signature verification failed: ${err.message}`);
+      console.error('❌ Webhook signature verification failed:', {
+        error: err.message,
+        signature: sig ? sig.substring(0, 20) + '...' : 'No signature',
+        bodyLength: req.body ? req.body.length : 0
+      });
       return res.status(httpStatus.BAD_REQUEST).json({
         error: `Webhook Error: ${err.message}`,
       });
     }
 
-    console.log(`Received webhook event: ${event.type}`);
+    console.log('📨 Received webhook event:', {
+      type: event.type,
+      id: event.id,
+      created: new Date(event.created * 1000).toISOString(),
+      livemode: event.livemode
+    });
 
     try {
       // Handle the event
@@ -86,13 +110,21 @@ class WebhookController {
   // Handle successful payment
   private async handlePaymentSucceeded(paymentIntent: any): Promise<void> {
     try {
-      console.log(`Payment succeeded: ${paymentIntent.id}`);
+      console.log('💰 Processing payment succeeded:', {
+        paymentIntentId: paymentIntent.id,
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency,
+        status: paymentIntent.status,
+        metadata: paymentIntent.metadata
+      });
 
       const bidId = paymentIntent.metadata?.bid_id;
       if (!bidId) {
-        console.error('No bid_id found in payment intent metadata');
+        console.error('❌ No bid_id found in payment intent metadata:', paymentIntent.metadata);
         return;
       }
+
+      console.log('🎯 Processing payment for bid:', bidId);
 
       // Use the service method to handle the event
       await PaymentService.handleWebhookEvent({
@@ -100,11 +132,9 @@ class WebhookController {
         data: { object: paymentIntent },
       });
 
-      console.log(
-        `Successfully processed payment_intent.succeeded for bid ${bidId}`
-      );
+      console.log('✅ Successfully processed payment_intent.succeeded for bid:', bidId);
     } catch (error) {
-      console.error('Error handling payment succeeded:', error);
+      console.error('❌ Error handling payment succeeded:', error);
       throw error;
     }
   }

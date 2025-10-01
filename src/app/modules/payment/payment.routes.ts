@@ -7,9 +7,9 @@ import { USER_ROLES } from '../../../enums/user';
 const router = express.Router();
 
 // Webhook routes (no authentication required)
+// Note: Raw body parsing is handled at app level for webhook routes
 router.post(
   '/webhook',
-  express.raw({ type: 'application/json' }),
   WebhookController.handleStripeWebhook
 );
 router.get('/webhook/health', WebhookController.webhookHealthCheck);
