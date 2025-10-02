@@ -11,7 +11,8 @@ const auth_1 = __importDefault(require("../../middlewares/auth"));
 const user_1 = require("../../../enums/user");
 const router = express_1.default.Router();
 // Webhook routes (no authentication required)
-router.post('/webhook', express_1.default.raw({ type: 'application/json' }), webhook_controller_1.default.handleStripeWebhook);
+// Note: Raw body parsing is handled at app level for webhook routes
+router.post('/webhook', webhook_controller_1.default.handleStripeWebhook);
 router.get('/webhook/health', webhook_controller_1.default.webhookHealthCheck);
 // Stripe Connect account management
 router.post('/stripe/account', (0, auth_1.default)(user_1.USER_ROLES.TASKER), payment_controller_1.default.createStripeAccountController);

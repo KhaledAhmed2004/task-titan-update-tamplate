@@ -263,6 +263,64 @@ const createEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function
             metadata: data.metadata,
         });
         yield payment.save();
+        // 🔄 AUTOMATIC CAPTURE FALLBACK: Set up a delayed capture mechanism
+        // This will run after payment confirmation to ensure capture happens even if webhook fails
+        setTimeout(() => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                console.log(`🔄 Checking payment status for automatic capture: ${paymentIntent.id}`);
+                // Check current payment intent status
+                const currentPaymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(paymentIntent.id);
+                if (currentPaymentIntent.status === 'requires_capture') {
+                    console.log(`💳 Payment ${paymentIntent.id} requires capture, capturing automatically...`);
+                    try {
+                        // Capture the payment
+                        const capturedPayment = yield stripe_1.stripe.paymentIntents.capture(paymentIntent.id);
+                        console.log(`✅ Payment ${paymentIntent.id} captured successfully via fallback mechanism`);
+                        // Update payment status to HELD after successful capture
+                        yield payment_model_1.Payment.updateMany({
+                            bidId: data.bidId,
+                            stripePaymentIntentId: paymentIntent.id,
+                        }, {
+                            status: payment_interface_1.PAYMENT_STATUS.HELD,
+                        });
+                        // Complete bid acceptance process
+                        const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
+                        yield BidService.completeBidAcceptance(data.bidId.toString());
+                        console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
+                    }
+                    catch (captureError) {
+                        console.error(`❌ Failed to capture payment ${paymentIntent.id} via fallback:`, captureError);
+                        // If already captured, just update status
+                        if (captureError.message && captureError.message.includes('already been captured')) {
+                            console.log(`✅ Payment ${paymentIntent.id} was already captured`);
+                            yield payment_model_1.Payment.updateMany({
+                                bidId: data.bidId,
+                                stripePaymentIntentId: paymentIntent.id,
+                            }, {
+                                status: payment_interface_1.PAYMENT_STATUS.HELD,
+                            });
+                        }
+                    }
+                }
+                else if (currentPaymentIntent.status === 'succeeded') {
+                    console.log(`✅ Payment ${paymentIntent.id} already succeeded, updating status via fallback`);
+                    // Update payment status to HELD
+                    yield payment_model_1.Payment.updateMany({
+                        bidId: data.bidId,
+                        stripePaymentIntentId: paymentIntent.id,
+                    }, {
+                        status: payment_interface_1.PAYMENT_STATUS.HELD,
+                    });
+                    // Complete bid acceptance process
+                    const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
+                    yield BidService.completeBidAcceptance(data.bidId.toString());
+                    console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
+                }
+            }
+            catch (error) {
+                console.error(`❌ Error in automatic capture fallback for payment ${paymentIntent.id}:`, error);
+            }
+        }), 30000); // Wait 30 seconds before checking (gives webhook time to process first)
         return {
             payment: payment,
             client_secret: paymentIntent.client_secret,

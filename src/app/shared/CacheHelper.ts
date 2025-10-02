@@ -1,4 +1,6 @@
 import NodeCache from 'node-cache';
+import type Redis from 'ioredis';
+import { getRedisClient } from '../../config/redis';
 
 export interface ICacheOptions {
   ttl?: number; // Time to live in seconds
@@ -8,13 +10,15 @@ export interface ICacheOptions {
 export class CacheHelper {
   private static instance: CacheHelper;
   private cache: NodeCache;
+  private redis: Redis | null;
 
   private constructor(options: ICacheOptions = {}) {
     this.cache = new NodeCache({
       stdTTL: options.ttl || 600, // Default 10 minutes
       checkperiod: options.checkperiod || 120, // Check every 2 minutes
-      useClones: false
+      useClones: false,
     });
+    this.redis = getRedisClient();
   }
 
   public static getInstance(options?: ICacheOptions): CacheHelper {
@@ -25,23 +29,70 @@ export class CacheHelper {
   }
 
   // Basic cache operations
-  set<T>(key: string, value: T, ttl?: number): boolean {
+  async set<T>(key: string, value: T, ttl?: number): Promise<boolean> {
+    if (this.redis) {
+      const payload = JSON.stringify(value);
+      try {
+        if (ttl && ttl > 0) {
+          await this.redis.set(key, payload, 'EX', ttl);
+        } else {
+          await this.redis.set(key, payload);
+        }
+        return true;
+      } catch {
+        // Fallback to memory on error
+        return this.cache.set(key, value, ttl || 0);
+      }
+    }
     return this.cache.set(key, value, ttl || 0);
   }
 
-  get<T>(key: string): T | undefined {
+  async get<T>(key: string): Promise<T | undefined> {
+    if (this.redis) {
+      try {
+        const val = await this.redis.get(key);
+        return val ? (JSON.parse(val) as T) : undefined;
+      } catch {
+        return this.cache.get<T>(key);
+      }
+    }
     return this.cache.get<T>(key);
   }
 
-  del(key: string | string[]): number {
+  async del(key: string | string[]): Promise<number> {
+    if (this.redis) {
+      try {
+        const keys = Array.isArray(key) ? key : [key];
+        const res = await this.redis.del(...keys);
+        return res;
+      } catch {
+        return this.cache.del(key);
+      }
+    }
     return this.cache.del(key);
   }
 
-  has(key: string): boolean {
+  async has(key: string): Promise<boolean> {
+    if (this.redis) {
+      try {
+        const exists = await this.redis.exists(key);
+        return exists === 1;
+      } catch {
+        return this.cache.has(key);
+      }
+    }
     return this.cache.has(key);
   }
 
-  flush(): void {
+  async flush(): Promise<void> {
+    if (this.redis) {
+      try {
+        await this.redis.flushdb();
+        return;
+      } catch {
+        // fall through
+      }
+    }
     this.cache.flushAll();
   }
 
@@ -51,89 +102,90 @@ export class CacheHelper {
     fetchFunction: () => Promise<T>,
     ttl?: number
   ): Promise<T> {
-    const cached = this.get<T>(key);
+    const cached = await this.get<T>(key);
     if (cached !== undefined) {
       return cached;
     }
 
     const fresh = await fetchFunction();
-    this.set(key, fresh, ttl);
+    await this.set(key, fresh, ttl);
     return fresh;
   }
 
   // Cache with tags for group invalidation
-  setWithTags<T>(key: string, value: T, tags: string[], ttl?: number): boolean {
-    const success = this.set(key, value, ttl);
+  async setWithTags<T>(key: string, value: T, tags: string[], ttl?: number): Promise<boolean> {
+    const success = await this.set(key, value, ttl);
     if (success) {
-      // Store tag associations
-      tags.forEach(tag => {
+      for (const tag of tags) {
         const tagKey = `tag:${tag}`;
-        const taggedKeys = this.get<string[]>(tagKey) || [];
-        if (!taggedKeys.includes(key)) {
-          taggedKeys.push(key);
-          this.set(tagKey, taggedKeys);
+        const existing = (await this.get<string[]>(tagKey)) || [];
+        if (!existing.includes(key)) {
+          existing.push(key);
+          await this.set(tagKey, existing);
         }
-      });
+      }
     }
     return success;
   }
 
-  invalidateByTag(tag: string): number {
+  async invalidateByTag(tag: string): Promise<number> {
     const tagKey = `tag:${tag}`;
-    const taggedKeys = this.get<string[]>(tagKey) || [];
-    const deletedCount = this.del(taggedKeys);
-    this.del(tagKey);
+    const taggedKeys = (await this.get<string[]>(tagKey)) || [];
+    const deletedCount = await this.del(taggedKeys);
+    await this.del(tagKey);
     return deletedCount;
   }
 
   // Common cache patterns
-  cacheUserData<T>(userId: string, data: T, ttl: number = 1800): boolean {
+  async cacheUserData<T>(userId: string, data: T, ttl: number = 1800): Promise<boolean> {
     return this.setWithTags(`user:${userId}`, data, ['users'], ttl);
   }
 
-  cacheTaskData<T>(taskId: string, data: T, ttl: number = 900): boolean {
+  async cacheTaskData<T>(taskId: string, data: T, ttl: number = 900): Promise<boolean> {
     return this.setWithTags(`task:${taskId}`, data, ['tasks'], ttl);
   }
 
-  cacheCategoryData<T>(categoryId: string, data: T, ttl: number = 3600): boolean {
+  async cacheCategoryData<T>(categoryId: string, data: T, ttl: number = 3600): Promise<boolean> {
     return this.setWithTags(`category:${categoryId}`, data, ['categories'], ttl);
   }
 
-  cacheSearchResults<T>(searchKey: string, results: T, ttl: number = 300): boolean {
+  async cacheSearchResults<T>(searchKey: string, results: T, ttl: number = 300): Promise<boolean> {
     return this.setWithTags(`search:${searchKey}`, results, ['search'], ttl);
   }
 
   // Invalidation helpers
-  invalidateUser(userId: string): number {
+  async invalidateUser(userId: string): Promise<number> {
     return this.del(`user:${userId}`);
   }
 
-  invalidateTask(taskId: string): number {
+  async invalidateTask(taskId: string): Promise<number> {
     return this.del(`task:${taskId}`);
   }
 
-  invalidateAllUsers(): number {
+  async invalidateAllUsers(): Promise<number> {
     return this.invalidateByTag('users');
   }
 
-  invalidateAllTasks(): number {
+  async invalidateAllTasks(): Promise<number> {
     return this.invalidateByTag('tasks');
   }
 
-  invalidateAllCategories(): number {
+  async invalidateAllCategories(): Promise<number> {
     return this.invalidateByTag('categories');
   }
 
-  invalidateAllSearches(): number {
+  async invalidateAllSearches(): Promise<number> {
     return this.invalidateByTag('search');
   }
 
   // Statistics
   getStats() {
+    // Redis stats not implemented; return NodeCache stats for fallback
     return this.cache.getStats();
   }
 
   getKeys(): string[] {
+    // Redis keys listing is not exposed to avoid performance issues
     return this.cache.keys();
   }
 
@@ -144,17 +196,17 @@ export class CacheHelper {
 
   // Middleware for Express
   cacheMiddleware(ttl: number = 300) {
-    return (req: any, res: any, next: any) => {
+    return async (req: any, res: any, next: any) => {
       const key = this.generateCacheKey('route', req.originalUrl);
-      const cached = this.get(key);
+      const cached = await this.get(key);
 
-      if (cached) {
+      if (cached !== undefined) {
         return res.json(cached);
       }
 
       const originalSend = res.json;
-      res.json = (data: any) => {
-        this.set(key, data, ttl);
+      res.json = async (data: any) => {
+        await this.set(key, data, ttl);
         return originalSend.call(res, data);
       };
 
