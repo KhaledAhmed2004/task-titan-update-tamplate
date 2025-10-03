@@ -223,7 +223,15 @@ app.options('*', (0, cors_1.default)({
 // -------------------
 // Body parser
 // -------------------
-app.use(express_1.default.json());
+// Special handling for webhook routes - they need raw body for signature verification
+app.use('/api/v1/payments/webhook', express_1.default.raw({ type: 'application/json' }));
+// For all other routes, use JSON parsing
+app.use((req, res, next) => {
+    if (req.path.includes('/webhook')) {
+        return next(); // Skip JSON parsing for webhook routes
+    }
+    express_1.default.json()(req, res, next);
+});
 app.use(express_1.default.urlencoded({ extended: true }));
 // -------------------
 // Passport

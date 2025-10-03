@@ -35,7 +35,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleStripeWebhookController = exports.getPaymentStatsController = exports.getPaymentsController = exports.getPaymentByIdController = exports.refundPaymentController = exports.checkOnboardingStatusController = exports.getOnboardingLinkController = exports.createStripeAccountController = void 0;
+exports.handleStripeWebhookController = exports.getPaymentStatsController = exports.getPaymentsController = exports.getPaymentByIdController = exports.refundPaymentController = exports.checkOnboardingStatusController = exports.getOnboardingLinkController = exports.getCurrentIntentByBidController = exports.createStripeAccountController = void 0;
 const http_status_1 = __importDefault(require("http-status"));
 const catchAsync_1 = __importDefault(require("../../../shared/catchAsync"));
 const sendResponse_1 = __importDefault(require("../../../shared/sendResponse"));
@@ -55,6 +55,22 @@ exports.createStripeAccountController = (0, catchAsync_1.default)((req, res) => 
         success: true,
         statusCode: http_status_1.default.CREATED,
         message: 'Stripe account created successfully',
+        data: result,
+    });
+}));
+// Get current intent (and client_secret if applicable) by bidId
+exports.getCurrentIntentByBidController = (0, catchAsync_1.default)((req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { bidId } = req.params;
+    if (!bidId) {
+        throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Bid ID is required');
+    }
+    const result = yield (0, payment_service_1.getCurrentIntentByBid)(bidId);
+    (0, sendResponse_1.default)(res, {
+        success: true,
+        statusCode: http_status_1.default.OK,
+        message: result.client_secret
+            ? 'Current intent retrieved with client_secret'
+            : 'Current intent retrieved (no client_secret needed)',
         data: result,
     });
 }));
@@ -236,5 +252,6 @@ const PaymentController = {
     handleStripeWebhookController: exports.handleStripeWebhookController,
     deleteStripeAccountController,
     getPaymentHistoryController,
+    getCurrentIntentByBidController: exports.getCurrentIntentByBidController,
 };
 exports.default = PaymentController;

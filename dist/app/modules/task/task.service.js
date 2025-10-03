@@ -19,7 +19,7 @@ const QueryBuilder_1 = __importDefault(require("../../builder/QueryBuilder"));
 const category_model_1 = require("../category/category.model");
 const task_interface_1 = require("./task.interface");
 const task_model_1 = require("./task.model");
-const unlinkFile_1 = __importDefault(require("../../../shared/unlinkFile"));
+const safeUnlinkDiff_1 = __importDefault(require("../../../shared/safeUnlinkDiff"));
 const bid_service_1 = require("../bid/bid.service");
 const notificationsHelper_1 = require("../notification/notificationsHelper");
 const payment_service_1 = __importDefault(require("../payment/payment.service"));
@@ -104,14 +104,15 @@ const getTaskById = (taskId) => __awaiter(void 0, void 0, void 0, function* () {
     return result;
 });
 const updateTask = (taskId, payload) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     const task = yield task_model_1.TaskModel.findById(taskId);
     if (!task) {
         throw new ApiError_1.default(http_status_codes_1.StatusCodes.NOT_FOUND, 'Task not found');
     }
-    if (payload.taskImage && Array.isArray(payload.taskImage)) {
-        payload.taskImage.forEach((imgPath) => {
-            (0, unlinkFile_1.default)(imgPath);
-        });
+    // Unlink removed images: compare previous task.taskImage[] with new payload images
+    const newImages = (_a = payload.taskImages) !== null && _a !== void 0 ? _a : payload.taskImage;
+    if (Array.isArray(task.taskImage) && Array.isArray(newImages)) {
+        (0, safeUnlinkDiff_1.default)(task.taskImage, newImages);
     }
     const updateDoc = yield task_model_1.TaskModel.findOneAndUpdate({ _id: taskId }, payload, {
         new: true,

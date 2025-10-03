@@ -35,7 +35,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getUserPaymentStats = exports.getUserPayments = exports.handleWebhookEvent = exports.getPaymentStats = exports.getPayments = exports.getPaymentById = exports.refundEscrowPayment = exports.releaseEscrowPayment = exports.createEscrowPayment = exports.checkOnboardingStatus = exports.createOnboardingLink = exports.createStripeAccount = void 0;
+exports.getCurrentIntentByBid = exports.getUserPaymentStats = exports.getUserPayments = exports.handleWebhookEvent = exports.getPaymentStats = exports.getPayments = exports.getPaymentById = exports.refundEscrowPayment = exports.releaseEscrowPayment = exports.createEscrowPayment = exports.checkOnboardingStatus = exports.createOnboardingLink = exports.createStripeAccount = void 0;
 const payment_interface_1 = require("./payment.interface");
 const mongoose_1 = __importDefault(require("mongoose"));
 const payment_model_1 = require("./payment.model");
@@ -549,6 +549,9 @@ const handleWebhookEvent = (event) => __awaiter(void 0, void 0, void 0, function
         case 'account.updated':
             yield handleAccountUpdated(event.data.object);
             break;
+        case 'payment_intent.amount_capturable_updated':
+            yield handleAmountCapturableUpdated(event.data.object);
+            break;
         default:
             console.log(`Unhandled event type: ${event.type}`);
     }
@@ -645,6 +648,58 @@ const handleAccountUpdated = (account) => __awaiter(void 0, void 0, void 0, func
         payoutsEnabled: account.payouts_enabled,
     });
 });
+// Handle amount capturable updated webhook (manual capture flow)
+const handleAmountCapturableUpdated = (paymentIntent) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const bidId = (_a = paymentIntent.metadata) === null || _a === void 0 ? void 0 : _a.bid_id;
+    try {
+        if (!bidId) {
+            console.error('❌ No bid_id in payment intent metadata for amount_capturable_updated:', paymentIntent.metadata);
+            return;
+        }
+        console.log(`Payment ${paymentIntent.id} is now capturable, attempting capture...`);
+        try {
+            // Capture the payment
+            const capturedPayment = yield stripe_1.stripe.paymentIntents.capture(paymentIntent.id);
+            console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
+            // Update payment status to HELD after successful capture
+            yield payment_model_1.Payment.updateMany({
+                bidId: bidId,
+                stripePaymentIntentId: paymentIntent.id,
+            }, {
+                status: payment_interface_1.PAYMENT_STATUS.HELD,
+            });
+        }
+        catch (captureError) {
+            console.error(`Failed to capture payment ${paymentIntent.id} in amount_capturable_updated handler:`, captureError);
+            if (captureError.message && captureError.message.includes('already been captured')) {
+                console.log(`Payment ${paymentIntent.id} was already captured`);
+                yield payment_model_1.Payment.updateMany({
+                    bidId: bidId,
+                    stripePaymentIntentId: paymentIntent.id,
+                }, {
+                    status: payment_interface_1.PAYMENT_STATUS.HELD,
+                });
+            }
+            else {
+                // Do not throw to avoid Stripe retry storms; log for manual intervention
+                return;
+            }
+        }
+        // Complete bid acceptance process
+        const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
+        try {
+            yield BidService.completeBidAcceptance(bidId);
+            console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated)`);
+        }
+        catch (error) {
+            console.error('Failed to complete bid acceptance after capture:', error);
+        }
+    }
+    catch (error) {
+        console.error(`Error in handleAmountCapturableUpdated for payment ${paymentIntent.id}:`, error);
+    }
+});
 // Get user payments (for user-specific routes)
 const getUserPayments = (userId_1, ...args_1) => __awaiter(void 0, [userId_1, ...args_1], void 0, function* (userId, page = 1, limit = 10) {
     try {
@@ -734,6 +789,41 @@ const getPaymentHistory = (userId, query) => __awaiter(void 0, void 0, void 0, f
         throw new ApiError_1.default(http_status_1.default.INTERNAL_SERVER_ERROR, 'Failed to fetch payment history');
     }
 });
+// Retrieve current Stripe PaymentIntent for a bid and return client_secret when applicable
+const getCurrentIntentByBid = (bidId) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    if (!mongoose_1.default.isValidObjectId(bidId)) {
+        throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Invalid bidId');
+    }
+    const payments = yield payment_model_1.Payment.getPaymentsByBid(new mongoose_1.default.Types.ObjectId(bidId));
+    if (!payments || payments.length === 0) {
+        throw new ApiError_1.default(http_status_1.default.NOT_FOUND, 'No payment found for this bid');
+    }
+    // Prefer pending payment; otherwise take the most recent
+    const payment = payments.find((p) => p.status === payment_interface_1.PAYMENT_STATUS.PENDING) || payments[0];
+    if (!payment.stripePaymentIntentId) {
+        throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Payment does not have a Stripe PaymentIntent');
+    }
+    const intent = yield stripe_1.stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
+    // Only return client_secret when the intent is awaiting confirmation or action
+    const statusesWithSecret = new Set([
+        'requires_payment_method',
+        'requires_confirmation',
+        'requires_action',
+        'processing',
+    ]);
+    const response = {
+        bidId,
+        paymentId: (_a = payment._id) === null || _a === void 0 ? void 0 : _a.toString(),
+        stripePaymentIntentId: intent.id,
+        intent_status: intent.status,
+    };
+    if (statusesWithSecret.has(intent.status) && intent.client_secret) {
+        response.client_secret = intent.client_secret;
+    }
+    return response;
+});
+exports.getCurrentIntentByBid = getCurrentIntentByBid;
 const PaymentService = {
     createStripeAccount: exports.createStripeAccount,
     getPaymentHistory,
@@ -748,6 +838,7 @@ const PaymentService = {
     getUserPayments: exports.getUserPayments,
     getUserPaymentStats: exports.getUserPaymentStats,
     handleWebhookEvent: exports.handleWebhookEvent,
+    getCurrentIntentByBid: exports.getCurrentIntentByBid,
     deleteStripeAccountService,
 };
 exports.default = PaymentService;

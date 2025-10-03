@@ -40,6 +40,13 @@ router.get(
   PaymentController.getPaymentHistoryController
 );
 
+// Retrieve current intent and client_secret by bidId
+router.get(
+  '/by-bid/:bidId/current-intent',
+  auth(USER_ROLES.POSTER, USER_ROLES.TASKER, USER_ROLES.SUPER_ADMIN),
+  PaymentController.getCurrentIntentByBidController
+);
+
 router.post(
   '/refund/:paymentId',
   auth(USER_ROLES.POSTER, USER_ROLES.SUPER_ADMIN),

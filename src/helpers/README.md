@@ -79,6 +79,75 @@ const updateTask = async (id: string, payload: Partial<ITask>) => {
   - `filter`: Optional filter object
 - **Returns**: `number`
 
+##### `withTransaction(fn)`
+- **Description**: Runs a set of operations inside a MongoDB transaction
+- **Parameters**:
+  - `fn`: Async callback that receives the `session` and returns a result
+- **Returns**: Result of the callback after commit
+- **Throws**: Propagates any error and automatically aborts the transaction
+
+**Example Usage**:
+```typescript
+import { withTransaction } from '../../../helpers/serviceHelpers';
+import { TaskModel } from '../../app/modules/task/task.model';
+import { BidModel } from '../../app/modules/bid/bid.model';
+
+const acceptBid = async (taskId: string, bidId: string) => {
+  return await withTransaction(async (session) => {
+    await TaskModel.findByIdAndUpdate(
+      taskId,
+      { $set: { assignedTo: new Types.ObjectId('...') } },
+      { session }
+    );
+
+    await BidModel.updateMany(
+      { taskId, _id: { $ne: bidId } },
+      { $set: { status: 'rejected' } },
+      { session }
+    );
+
+    return { ok: true };
+  });
+};
+```
+
+##### `ensureStatusOrThrow(currentStatus, expected, options?)`
+- **Description**: Asserts a status value equals one of the expected values
+- **Parameters**:
+  - `currentStatus`: Current status value (string/number)
+  - `expected`: A single expected status or an array of allowed statuses
+  - `options`: `{ entityName?, message?, code? }` to customize errors
+- **Throws**: `ApiError` with given or default status code
+
+**Example Usage**:
+```typescript
+import { ensureStatusOrThrow } from '../../../helpers/serviceHelpers';
+import { TaskStatus } from '../../app/modules/task/task.interface';
+
+ensureStatusOrThrow(task.status, TaskStatus.UNDER_REVIEW, {
+  entityName: 'Task',
+  message: 'Task must be under review to complete',
+});
+```
+
+##### `ensureOwnershipOrThrow(entity, ownerKey, userId, options?)`
+- **Description**: Asserts the acting user owns the entity by comparing `ownerKey`
+- **Parameters**:
+  - `entity`: The document to check
+  - `ownerKey`: Key that holds the owner id (e.g., `userId`)
+  - `userId`: Acting user id (string/ObjectId)
+  - `options`: `{ message?, code? }` to customize errors
+- **Throws**: `ApiError` with `403` by default
+
+**Example Usage**:
+```typescript
+import { ensureOwnershipOrThrow } from '../../../helpers/serviceHelpers';
+
+ensureOwnershipOrThrow(task, 'userId', clientId, {
+  message: 'Only task owner can complete the task',
+});
+```
+
 ### 2. Pagination Helper (`paginationHelper.ts`)
 
 **Purpose**: Standardize pagination logic across the application.

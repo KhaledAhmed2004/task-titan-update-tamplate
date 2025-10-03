@@ -69,6 +69,10 @@ class WebhookController {
           await this.handlePaymentCanceled(event.data.object);
           break;
 
+        case 'payment_intent.amount_capturable_updated':
+          await this.handleAmountCapturableUpdated(event.data.object);
+          break;
+
         case 'account.updated':
           await this.handleAccountUpdated(event.data.object);
           break;
@@ -187,6 +191,38 @@ class WebhookController {
       );
     } catch (error) {
       console.error('Error handling payment canceled:', error);
+      throw error;
+    }
+  }
+
+  // Handle amount capturable updated (manual capture flow)
+  private async handleAmountCapturableUpdated(paymentIntent: any): Promise<void> {
+    try {
+      console.log('💳 Amount capturable updated:', {
+        paymentIntentId: paymentIntent.id,
+        amount_capturable: paymentIntent.amount_capturable,
+        currency: paymentIntent.currency,
+        status: paymentIntent.status,
+        metadata: paymentIntent.metadata
+      });
+
+      const bidId = paymentIntent.metadata?.bid_id;
+      if (!bidId) {
+        console.error('❌ No bid_id found in payment intent metadata:', paymentIntent.metadata);
+        return;
+      }
+
+      console.log('🎯 Triggering capture for bid:', bidId);
+
+      // Delegate to service to perform capture + updates
+      await PaymentService.handleWebhookEvent({
+        type: 'payment_intent.amount_capturable_updated',
+        data: { object: paymentIntent },
+      });
+
+      console.log('✅ Successfully processed amount_capturable_updated for bid:', bidId);
+    } catch (error) {
+      console.error('❌ Error handling amount capturable updated:', error);
       throw error;
     }
   }

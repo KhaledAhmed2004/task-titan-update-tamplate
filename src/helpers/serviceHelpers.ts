@@ -1,4 +1,4 @@
-import { Model, Types } from 'mongoose';
+import mongoose, { Model, Types } from 'mongoose';
 import ApiError from '../errors/ApiError';
 import { StatusCodes } from 'http-status-codes';
 
@@ -123,4 +123,75 @@ export const getCount = async <T>(
   filter: Record<string, unknown> = {}
 ): Promise<number> => {
   return await model.countDocuments(filter);
+};
+
+/**
+ * Run a set of operations inside a MongoDB transaction
+ * @param fn - Callback that receives the session and returns a result
+ * @returns Result of the callback after commit
+ */
+export const withTransaction = async <T>(
+  fn: (session: mongoose.ClientSession) => Promise<T>
+): Promise<T> => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const result = await fn(session);
+    await session.commitTransaction();
+    return result;
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Ensure a document's status matches expected value(s), otherwise throw
+ * @param currentStatus - The current status value
+ * @param expected - A single expected status or a list of allowed statuses
+ * @param options - Optional error customization
+ */
+export const ensureStatusOrThrow = (
+  currentStatus: string | number,
+  expected: string | number | Array<string | number>,
+  options?: { entityName?: string; message?: string; code?: number }
+): void => {
+  const ok = Array.isArray(expected)
+    ? expected.includes(currentStatus)
+    : currentStatus === expected;
+
+  if (!ok) {
+    const code = options?.code ?? StatusCodes.BAD_REQUEST;
+    const entity = options?.entityName ?? 'Resource';
+    const message =
+      options?.message ?? `${entity} has invalid status: ${String(currentStatus)}`;
+    throw new ApiError(code, message);
+  }
+};
+
+/**
+ * Ensure the acting user owns the entity (by owner key), otherwise throw
+ * @param entity - The document to check
+ * @param ownerKey - The key that holds the owner's id (e.g. 'userId')
+ * @param userId - The acting user's id
+ * @param options - Optional error customization
+ */
+export const ensureOwnershipOrThrow = (
+  entity: Record<string, unknown>,
+  ownerKey: string,
+  userId: Types.ObjectId | string,
+  options?: { message?: string; code?: number }
+): void => {
+  const owner = entity?.[ownerKey] as Types.ObjectId | string | undefined;
+  const ownerStr = owner ? owner.toString() : '';
+  const userStr = userId.toString();
+
+  if (!owner || ownerStr !== userStr) {
+    const code = options?.code ?? StatusCodes.FORBIDDEN;
+    const message = options?.message ?? 'You are not authorized to perform this action';
+    throw new ApiError(code, message);
+  }
 };

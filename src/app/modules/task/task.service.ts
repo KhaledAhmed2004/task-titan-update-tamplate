@@ -6,6 +6,7 @@ import { TaskUpdate, TaskStatus } from './task.interface';
 import { Task } from './task.interface';
 import { TaskModel } from './task.model';
 import unlinkFile from '../../../shared/unlinkFile';
+import safeUnlinkDiff from '../../../shared/safeUnlinkDiff';
 import { BidService } from '../bid/bid.service';
 import { sendNotifications } from '../notification/notificationsHelper';
 import PaymentService from '../payment/payment.service';
@@ -113,10 +114,10 @@ const updateTask = async (taskId: string, payload: TaskUpdate) => {
     throw new ApiError(StatusCodes.NOT_FOUND, 'Task not found');
   }
 
-  if (payload.taskImage && Array.isArray(payload.taskImage)) {
-    payload.taskImage.forEach((imgPath: string) => {
-      unlinkFile(imgPath);
-    });
+  // Unlink removed images: compare previous task.taskImage[] with new payload images
+  const newImages = (payload as any).taskImages ?? (payload as any).taskImage;
+  if (Array.isArray(task.taskImage) && Array.isArray(newImages)) {
+    safeUnlinkDiff(task.taskImage, newImages);
   }
 
   const updateDoc = await TaskModel.findOneAndUpdate({ _id: taskId }, payload, {

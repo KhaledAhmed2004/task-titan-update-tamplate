@@ -13,6 +13,7 @@ import PaymentService, {
   getPayments,
   getPaymentStats,
   handleWebhookEvent,
+  getCurrentIntentByBid,
 } from './payment.service';
 import { IPaymentFilters } from './payment.interface';
 import { JwtPayload } from 'jsonwebtoken';
@@ -37,6 +38,29 @@ export const createStripeAccountController = catchAsync(
       success: true,
       statusCode: httpStatus.CREATED,
       message: 'Stripe account created successfully',
+      data: result,
+    });
+  }
+);
+
+// Get current intent (and client_secret if applicable) by bidId
+export const getCurrentIntentByBidController = catchAsync(
+  async (req: Request, res: Response) => {
+    const { bidId } = req.params;
+
+    if (!bidId) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Bid ID is required');
+    }
+
+    const result = await getCurrentIntentByBid(bidId);
+
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message:
+        result.client_secret
+          ? 'Current intent retrieved with client_secret'
+          : 'Current intent retrieved (no client_secret needed)',
       data: result,
     });
   }
@@ -287,6 +311,7 @@ const PaymentController = {
   handleStripeWebhookController,
   deleteStripeAccountController,
   getPaymentHistoryController,
+  getCurrentIntentByBidController,
 };
 
 export default PaymentController;

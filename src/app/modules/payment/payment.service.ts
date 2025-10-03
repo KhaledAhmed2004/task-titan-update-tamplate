@@ -318,81 +318,6 @@ export const createEscrowPayment = async (
     });
     await payment.save();
 
-    // 🔄 AUTOMATIC CAPTURE FALLBACK: Set up a delayed capture mechanism
-    // This will run after payment confirmation to ensure capture happens even if webhook fails
-    setTimeout(async () => {
-      try {
-        console.log(`🔄 Checking payment status for automatic capture: ${paymentIntent.id}`);
-        
-        // Check current payment intent status
-        const currentPaymentIntent = await stripe.paymentIntents.retrieve(paymentIntent.id);
-        
-        if (currentPaymentIntent.status === 'requires_capture') {
-          console.log(`💳 Payment ${paymentIntent.id} requires capture, capturing automatically...`);
-          
-          try {
-            // Capture the payment
-            const capturedPayment = await stripe.paymentIntents.capture(paymentIntent.id);
-            console.log(`✅ Payment ${paymentIntent.id} captured successfully via fallback mechanism`);
-            
-            // Update payment status to HELD after successful capture
-            await PaymentModel.updateMany(
-              {
-                bidId: data.bidId,
-                stripePaymentIntentId: paymentIntent.id,
-              },
-              {
-                status: PAYMENT_STATUS.HELD,
-              }
-            );
-            
-            // Complete bid acceptance process
-            const { BidService } = await import('../bid/bid.service');
-            await BidService.completeBidAcceptance(data.bidId.toString());
-            console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
-            
-          } catch (captureError: any) {
-            console.error(`❌ Failed to capture payment ${paymentIntent.id} via fallback:`, captureError);
-            
-            // If already captured, just update status
-            if (captureError.message && captureError.message.includes('already been captured')) {
-              console.log(`✅ Payment ${paymentIntent.id} was already captured`);
-              await PaymentModel.updateMany(
-                {
-                  bidId: data.bidId,
-                  stripePaymentIntentId: paymentIntent.id,
-                },
-                {
-                  status: PAYMENT_STATUS.HELD,
-                }
-              );
-            }
-          }
-        } else if (currentPaymentIntent.status === 'succeeded') {
-          console.log(`✅ Payment ${paymentIntent.id} already succeeded, updating status via fallback`);
-          
-          // Update payment status to HELD
-          await PaymentModel.updateMany(
-            {
-              bidId: data.bidId,
-              stripePaymentIntentId: paymentIntent.id,
-            },
-            {
-              status: PAYMENT_STATUS.HELD,
-            }
-          );
-          
-          // Complete bid acceptance process
-          const { BidService } = await import('../bid/bid.service');
-          await BidService.completeBidAcceptance(data.bidId.toString());
-          console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error in automatic capture fallback for payment ${paymentIntent.id}:`, error);
-      }
-    }, 30000); // Wait 30 seconds before checking (gives webhook time to process first)
-
     return {
       payment: payment as IPayment,
       client_secret: paymentIntent.client_secret!,
@@ -764,6 +689,9 @@ export const handleWebhookEvent = async (event: any): Promise<void> => {
     case 'account.updated':
       await handleAccountUpdated(event.data.object);
       break;
+    case 'payment_intent.amount_capturable_updated':
+      await handleAmountCapturableUpdated(event.data.object);
+      break;
     default:
       console.log(`Unhandled event type: ${event.type}`);
   }
@@ -880,6 +808,65 @@ const handleAccountUpdated = async (account: any): Promise<void> => {
       payoutsEnabled: account.payouts_enabled,
     }
   );
+};
+
+// Handle amount capturable updated webhook (manual capture flow)
+const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> => {
+  const bidId = paymentIntent.metadata?.bid_id;
+
+  try {
+    if (!bidId) {
+      console.error('❌ No bid_id in payment intent metadata for amount_capturable_updated:', paymentIntent.metadata);
+      return;
+    }
+
+    console.log(`Payment ${paymentIntent.id} is now capturable, attempting capture...`);
+
+    try {
+      // Capture the payment
+      const capturedPayment = await stripe.paymentIntents.capture(paymentIntent.id);
+      console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
+
+      // Update payment status to HELD after successful capture
+      await PaymentModel.updateMany(
+        {
+          bidId: bidId,
+          stripePaymentIntentId: paymentIntent.id,
+        },
+        {
+          status: PAYMENT_STATUS.HELD,
+        }
+      );
+    } catch (captureError: any) {
+      console.error(`Failed to capture payment ${paymentIntent.id} in amount_capturable_updated handler:`, captureError);
+      if (captureError.message && captureError.message.includes('already been captured')) {
+        console.log(`Payment ${paymentIntent.id} was already captured`);
+        await PaymentModel.updateMany(
+          {
+            bidId: bidId,
+            stripePaymentIntentId: paymentIntent.id,
+          },
+          {
+            status: PAYMENT_STATUS.HELD,
+          }
+        );
+      } else {
+        // Do not throw to avoid Stripe retry storms; log for manual intervention
+        return;
+      }
+    }
+
+    // Complete bid acceptance process
+    const { BidService } = await import('../bid/bid.service');
+    try {
+      await BidService.completeBidAcceptance(bidId);
+      console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated)`);
+    } catch (error) {
+      console.error('Failed to complete bid acceptance after capture:', error);
+    }
+  } catch (error) {
+    console.error(`Error in handleAmountCapturableUpdated for payment ${paymentIntent.id}:`, error);
+  }
 };
 
 // Get user payments (for user-specific routes)
@@ -1004,6 +991,74 @@ const getPaymentHistory = async (
   }
 };
 
+// Retrieve current Stripe PaymentIntent for a bid and return client_secret when applicable
+export const getCurrentIntentByBid = async (
+  bidId: string
+): Promise<{
+  bidId: string;
+  paymentId?: string;
+  stripePaymentIntentId?: string;
+  intent_status: string;
+  client_secret?: string;
+}> => {
+  if (!mongoose.isValidObjectId(bidId)) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid bidId');
+  }
+
+  const payments = await PaymentModel.getPaymentsByBid(
+    new mongoose.Types.ObjectId(bidId)
+  );
+
+  if (!payments || payments.length === 0) {
+    throw new ApiError(
+      httpStatus.NOT_FOUND,
+      'No payment found for this bid'
+    );
+  }
+
+  // Prefer pending payment; otherwise take the most recent
+  const payment =
+    payments.find((p: any) => p.status === PAYMENT_STATUS.PENDING) || payments[0];
+
+  if (!payment.stripePaymentIntentId) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Payment does not have a Stripe PaymentIntent'
+    );
+  }
+
+  const intent = await stripe.paymentIntents.retrieve(
+    payment.stripePaymentIntentId
+  );
+
+  // Only return client_secret when the intent is awaiting confirmation or action
+  const statusesWithSecret = new Set([
+    'requires_payment_method',
+    'requires_confirmation',
+    'requires_action',
+    'processing',
+  ]);
+
+  const response: {
+    bidId: string;
+    paymentId?: string;
+    stripePaymentIntentId?: string;
+    intent_status: string;
+    client_secret?: string;
+  } = {
+    bidId,
+    paymentId: payment._id?.toString(),
+    stripePaymentIntentId: intent.id,
+    intent_status: intent.status,
+  };
+
+  if (statusesWithSecret.has(intent.status) && intent.client_secret) {
+    response.client_secret = intent.client_secret;
+  }
+
+  return response;
+};
+
 const PaymentService = {
   createStripeAccount,
   getPaymentHistory,
@@ -1018,6 +1073,7 @@ const PaymentService = {
   getUserPayments,
   getUserPaymentStats,
   handleWebhookEvent,
+  getCurrentIntentByBid,
   deleteStripeAccountService,
 };
 
