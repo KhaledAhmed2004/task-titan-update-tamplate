@@ -407,12 +407,7 @@ const completeTask = async (taskId: string, clientId: string) => {
     );
   }
 
-  if (!task.paymentIntentId) {
-    throw new ApiError(
-      StatusCodes.BAD_REQUEST,
-      'No payment found for this task'
-    );
-  }
+  // Proceed even if task.paymentIntentId is missing; rely on PaymentModel records
 
   try {
     // Find the payment record for this task

@@ -288,6 +288,11 @@ const acceptBid = async (bidId: string, clientId: string) => {
       paymentIntentId: paymentResult.payment.stripePaymentIntentId,
     });
 
+    // 8.1: Persist payment intent on the task for downstream completion flow
+    await TaskModel.findByIdAndUpdate(task._id, {
+      paymentIntentId: paymentResult.payment.stripePaymentIntentId,
+    });
+
     // 9th: Send notification to freelancer about payment pending
     const paymentPendingNotification = {
       text: `Your bid for "${task.title}" is being processed. Payment is pending confirmation.`,

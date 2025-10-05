@@ -227,18 +227,13 @@ const createEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function
         }
         const platformFee = (0, stripe_1.calculatePlatformFee)(data.amount);
         const freelancerAmount = (0, stripe_1.calculateFreelancerAmount)(data.amount);
-        // Create payment intent with application fee
+        // Separate charges and transfers model:
+        // Charge on the platform account; transfer to freelancer on task completion.
         const paymentIntent = yield stripe_1.stripe.paymentIntents.create({
             amount: (0, stripe_1.dollarsToCents)(data.amount),
             currency: 'usd',
-            automatic_payment_methods: {
-                enabled: true,
-            },
-            application_fee_amount: (0, stripe_1.dollarsToCents)(platformFee),
-            transfer_data: {
-                destination: freelancerStripeAccount.stripeAccountId,
-            },
-            capture_method: 'manual', // Hold the payment until task completion
+            automatic_payment_methods: { enabled: true },
+            capture_method: 'manual', // authorize now; we'll capture at acceptance webhook
             metadata: {
                 bid_id: data.bidId.toString(),
                 poster_id: data.posterId.toString(),
@@ -263,64 +258,6 @@ const createEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function
             metadata: data.metadata,
         });
         yield payment.save();
-        // 🔄 AUTOMATIC CAPTURE FALLBACK: Set up a delayed capture mechanism
-        // This will run after payment confirmation to ensure capture happens even if webhook fails
-        setTimeout(() => __awaiter(void 0, void 0, void 0, function* () {
-            try {
-                console.log(`🔄 Checking payment status for automatic capture: ${paymentIntent.id}`);
-                // Check current payment intent status
-                const currentPaymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(paymentIntent.id);
-                if (currentPaymentIntent.status === 'requires_capture') {
-                    console.log(`💳 Payment ${paymentIntent.id} requires capture, capturing automatically...`);
-                    try {
-                        // Capture the payment
-                        const capturedPayment = yield stripe_1.stripe.paymentIntents.capture(paymentIntent.id);
-                        console.log(`✅ Payment ${paymentIntent.id} captured successfully via fallback mechanism`);
-                        // Update payment status to HELD after successful capture
-                        yield payment_model_1.Payment.updateMany({
-                            bidId: data.bidId,
-                            stripePaymentIntentId: paymentIntent.id,
-                        }, {
-                            status: payment_interface_1.PAYMENT_STATUS.HELD,
-                        });
-                        // Complete bid acceptance process
-                        const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
-                        yield BidService.completeBidAcceptance(data.bidId.toString());
-                        console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
-                    }
-                    catch (captureError) {
-                        console.error(`❌ Failed to capture payment ${paymentIntent.id} via fallback:`, captureError);
-                        // If already captured, just update status
-                        if (captureError.message && captureError.message.includes('already been captured')) {
-                            console.log(`✅ Payment ${paymentIntent.id} was already captured`);
-                            yield payment_model_1.Payment.updateMany({
-                                bidId: data.bidId,
-                                stripePaymentIntentId: paymentIntent.id,
-                            }, {
-                                status: payment_interface_1.PAYMENT_STATUS.HELD,
-                            });
-                        }
-                    }
-                }
-                else if (currentPaymentIntent.status === 'succeeded') {
-                    console.log(`✅ Payment ${paymentIntent.id} already succeeded, updating status via fallback`);
-                    // Update payment status to HELD
-                    yield payment_model_1.Payment.updateMany({
-                        bidId: data.bidId,
-                        stripePaymentIntentId: paymentIntent.id,
-                    }, {
-                        status: payment_interface_1.PAYMENT_STATUS.HELD,
-                    });
-                    // Complete bid acceptance process
-                    const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
-                    yield BidService.completeBidAcceptance(data.bidId.toString());
-                    console.log(`✅ Bid ${data.bidId} acceptance completed via fallback mechanism`);
-                }
-            }
-            catch (error) {
-                console.error(`❌ Error in automatic capture fallback for payment ${paymentIntent.id}:`, error);
-            }
-        }), 30000); // Wait 30 seconds before checking (gives webhook time to process first)
         return {
             payment: payment,
             client_secret: paymentIntent.client_secret,
@@ -335,12 +272,13 @@ const createEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function
 exports.createEscrowPayment = createEscrowPayment;
 // Release payment when task is completed and approved
 const releaseEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b, _c, _d, _e;
     try {
         const payment = yield payment_model_1.Payment.isExistPaymentById(data.paymentId.toString());
         if (!payment) {
             throw new ApiError_1.default(http_status_1.default.NOT_FOUND, 'Payment not found');
         }
+        // Capture-at-acceptance model: allow release only when captured/held.
         if (payment.status !== payment_interface_1.PAYMENT_STATUS.HELD) {
             throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Payment is not in held status. Current status: ${payment.status}`);
         }
@@ -349,29 +287,30 @@ const releaseEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, functio
         if (!task || task.userId.toString() !== ((_a = data.clientId) === null || _a === void 0 ? void 0 : _a.toString())) {
             throw new ApiError_1.default(http_status_1.default.FORBIDDEN, 'You are not authorized to release this payment');
         }
-        // Check current payment intent status and capture if needed
-        let paymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
-        // Only capture if it requires capture
-        if (paymentIntent.status === 'requires_capture') {
-            try {
-                paymentIntent = yield stripe_1.stripe.paymentIntents.capture(payment.stripePaymentIntentId);
-            }
-            catch (captureError) {
-                // Handle already captured error
-                if (captureError.message &&
-                    captureError.message.includes('already been captured')) {
-                    // Retrieve the current status
-                    paymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
-                }
-                else {
-                    throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Failed to capture payment: ${captureError.message}`);
-                }
-            }
+        // Retrieve PaymentIntent to get the charge for source_transaction
+        const paymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(payment.stripePaymentIntentId, { expand: ['charges'] });
+        const pi = paymentIntent;
+        const charge = pi.charges && pi.charges.data && pi.charges.data[0];
+        if (!charge) {
+            throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'No charge found for captured payment; cannot create transfer.');
         }
-        // Verify payment is successful
-        if (paymentIntent.status !== 'succeeded') {
-            throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Payment is not in succeeded status. Current status: ${paymentIntent.status}`);
+        // Get freelancer Stripe account
+        const freelancerStripeAccount = yield payment_model_1.StripeAccount.isExistAccountByUserId(payment.freelancerId);
+        if (!(freelancerStripeAccount === null || freelancerStripeAccount === void 0 ? void 0 : freelancerStripeAccount.stripeAccountId)) {
+            throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Freelancer Stripe account not found');
         }
+        // Create transfer to freelancer for freelancerAmount (platform keeps fee)
+        yield stripe_1.stripe.transfers.create({
+            amount: (0, stripe_1.dollarsToCents)(payment.freelancerAmount),
+            currency: payment.currency || 'usd',
+            destination: freelancerStripeAccount.stripeAccountId,
+            source_transaction: charge.id,
+            metadata: {
+                bid_id: ((_c = (_b = payment.bidId) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b)) || String(payment.bidId),
+                payment_id: ((_e = (_d = payment._id) === null || _d === void 0 ? void 0 : _d.toString) === null || _e === void 0 ? void 0 : _e.call(_d)) || String(payment._id),
+                type: 'escrow_release_transfer',
+            },
+        });
         // Update payment status
         yield payment_model_1.Payment.updatePaymentStatus(data.paymentId, payment_interface_1.PAYMENT_STATUS.RELEASED);
         // Update bid status to completed
@@ -380,7 +319,7 @@ const releaseEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, functio
         });
         return {
             success: true,
-            message: 'Payment released successfully',
+            message: 'Payment released and transferred to freelancer successfully',
             freelancer_amount: payment.freelancerAmount,
             platform_fee: payment.platformFee,
         };
@@ -617,66 +556,28 @@ const handleWebhookEvent = (event) => __awaiter(void 0, void 0, void 0, function
 exports.handleWebhookEvent = handleWebhookEvent;
 // Handle payment succeeded webhook
 const handlePaymentSucceeded = (paymentIntent) => __awaiter(void 0, void 0, void 0, function* () {
-    const bidId = paymentIntent.metadata.bid_id;
+    var _a;
+    const bidId = (_a = paymentIntent.metadata) === null || _a === void 0 ? void 0 : _a.bid_id;
     try {
-        // Check if payment needs to be captured (for manual capture method)
-        if (paymentIntent.status === 'requires_capture') {
-            console.log(`Payment ${paymentIntent.id} requires capture, capturing now...`);
-            try {
-                // Capture the payment
-                const capturedPayment = yield stripe_1.stripe.paymentIntents.capture(paymentIntent.id);
-                console.log(`Payment ${paymentIntent.id} captured successfully`);
-                // Update payment status to HELD after successful capture
-                yield payment_model_1.Payment.updateMany({
-                    bidId: bidId,
-                    stripePaymentIntentId: paymentIntent.id,
-                }, {
-                    status: payment_interface_1.PAYMENT_STATUS.HELD,
-                });
-            }
-            catch (captureError) {
-                console.error(`Failed to capture payment ${paymentIntent.id}:`, captureError);
-                // If already captured, just update status
-                if (captureError.message && captureError.message.includes('already been captured')) {
-                    console.log(`Payment ${paymentIntent.id} was already captured`);
-                    yield payment_model_1.Payment.updateMany({
-                        bidId: bidId,
-                        stripePaymentIntentId: paymentIntent.id,
-                    }, {
-                        status: payment_interface_1.PAYMENT_STATUS.HELD,
-                    });
-                }
-                else {
-                    throw captureError;
-                }
-            }
-        }
-        else if (paymentIntent.status === 'succeeded') {
-            // Payment is already succeeded, just update status
-            console.log(`Payment ${paymentIntent.id} already succeeded`);
-            yield payment_model_1.Payment.updateMany({
-                bidId: bidId,
-                stripePaymentIntentId: paymentIntent.id,
-            }, {
-                status: payment_interface_1.PAYMENT_STATUS.HELD,
-            });
-        }
-        // Import BidService to complete bid acceptance
+        // After capture, confirm local status HELD (funds on platform balance)
+        yield payment_model_1.Payment.updateMany({
+            bidId: bidId,
+            stripePaymentIntentId: paymentIntent.id,
+        }, {
+            status: payment_interface_1.PAYMENT_STATUS.HELD,
+        });
+        // Complete bid acceptance if not already done
         const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
         try {
-            // Complete the bid acceptance process now that payment is confirmed
             yield BidService.completeBidAcceptance(bidId);
-            console.log(`Bid ${bidId} acceptance completed successfully`);
+            console.log(`Bid ${bidId} acceptance confirmed (payment_intent.succeeded).`);
         }
         catch (error) {
-            console.error('Failed to complete bid acceptance after payment success:', error);
-            // Don't throw error here as payment is already successful
-            // Log for manual intervention if needed
+            console.error('Failed to confirm bid acceptance on payment_intent.succeeded:', error);
         }
     }
     catch (error) {
         console.error(`Error in handlePaymentSucceeded for payment ${paymentIntent.id}:`, error);
-        // Don't throw error to prevent webhook retry loops
     }
 });
 // Handle payment failed webhook
@@ -715,12 +616,12 @@ const handleAmountCapturableUpdated = (paymentIntent) => __awaiter(void 0, void 
             console.error('❌ No bid_id in payment intent metadata for amount_capturable_updated:', paymentIntent.metadata);
             return;
         }
-        console.log(`Payment ${paymentIntent.id} is now capturable, attempting capture...`);
+        console.log(`Payment ${paymentIntent.id} is now capturable, capturing to hold funds on platform...`);
         try {
-            // Capture the payment
+            // Capture the payment on the platform account (no transfer_data configured)
             const capturedPayment = yield stripe_1.stripe.paymentIntents.capture(paymentIntent.id);
             console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
-            // Update payment status to HELD after successful capture
+            // Mark local payment as HELD (captured and held in platform balance)
             yield payment_model_1.Payment.updateMany({
                 bidId: bidId,
                 stripePaymentIntentId: paymentIntent.id,
@@ -740,15 +641,14 @@ const handleAmountCapturableUpdated = (paymentIntent) => __awaiter(void 0, void 
                 });
             }
             else {
-                // Do not throw to avoid Stripe retry storms; log for manual intervention
                 return;
             }
         }
-        // Complete bid acceptance process
+        // Complete bid acceptance process after successful capture
         const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
         try {
             yield BidService.completeBidAcceptance(bidId);
-            console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated)`);
+            console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated).`);
         }
         catch (error) {
             console.error('Failed to complete bid acceptance after capture:', error);
