@@ -15,6 +15,7 @@ import {
 } from './payment.model';
 import { User } from '../user/user.model';
 import { TaskModel } from '../task/task.model';
+import { TaskStatus } from '../task/task.interface';
 import { BidModel } from '../bid/bid.model';
 import ApiError from '../../../errors/ApiError';
 import httpStatus from 'http-status';
@@ -751,6 +752,27 @@ const handlePaymentFailed = async (paymentIntent: any): Promise<void> => {
     status: 'pending',
     paymentIntentId: null, // Clear the failed payment intent
   });
+
+  // Revert task assignment and status if this bid was already accepted
+  try {
+    const bid = await BidModel.findById(bidId);
+    if (bid) {
+      const task = await TaskModel.findById(bid.taskId);
+      if (task) {
+        // Only revert if the task is currently assigned to this tasker
+        const assignedMatches = task.assignedTo?.toString() === bid.taskerId?.toString();
+        if (assignedMatches) {
+          await TaskModel.findByIdAndUpdate(task._id, {
+            status: TaskStatus.OPEN,
+            assignedTo: null,
+            paymentIntentId: null,
+          });
+        }
+      }
+    }
+  } catch (revertErr) {
+    console.error('Failed to revert task state after payment failure:', revertErr);
+  }
 };
 
 // Handle account updated webhook

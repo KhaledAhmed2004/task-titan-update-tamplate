@@ -8,6 +8,9 @@ export type IMessage = {
   images?: string[];
   media?: string[];
   docs?: string[];
+  deliveredTo?: Types.ObjectId[];
+  readBy?: Types.ObjectId[];
+  editedAt?: Date;
 };
 
 export type MessageModel = Model<IMessage, Record<string, unknown>>;

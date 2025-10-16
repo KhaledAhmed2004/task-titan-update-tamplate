@@ -184,6 +184,7 @@ import { StatusCodes } from 'http-status-codes';
 import express, { Request, Response } from 'express';
 import globalErrorHandler from './app/middlewares/globalErrorHandler';
 import './config/passport';
+import { requestLogger } from './app/middlewares/requestLogger';
 import path from 'path';
 import passport from 'passport';
 
@@ -265,6 +266,11 @@ app.use(express.urlencoded({ extended: true }));
 // Passport
 // -------------------
 app.use(passport.initialize());
+
+// -------------------
+// Request/Response logging
+// -------------------
+app.use(requestLogger);
 
 // -------------------
 // Static files

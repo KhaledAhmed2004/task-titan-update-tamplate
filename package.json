@@ -60,6 +60,7 @@
     "bullmq": "^5.59.0",
     "colors": "^1.4.0",
     "cors": "^2.8.5",
+    "node-notifier": "^10.0.1",
     "date-fns": "^4.1.0",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",

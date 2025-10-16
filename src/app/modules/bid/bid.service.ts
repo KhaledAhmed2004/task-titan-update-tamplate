@@ -271,7 +271,7 @@ const acceptBid = async (bidId: string, clientId: string) => {
   }
 
   try {
-    // 7th: Create escrow payment for the bid (but don't accept bid yet)
+    // 7th: Create escrow payment for the bid
     const paymentData = {
       taskId: new mongoose.Types.ObjectId(task._id),
       posterId: new mongoose.Types.ObjectId(clientId),
@@ -282,45 +282,86 @@ const acceptBid = async (bidId: string, clientId: string) => {
 
     const paymentResult = await PaymentService.createEscrowPayment(paymentData);
 
-    // 8th: Mark bid as payment_pending (new intermediate status)
-    await BidModel.findByIdAndUpdate(bid._id, {
-      status: BidStatus.PAYMENT_PENDING,
-      paymentIntentId: paymentResult.payment.stripePaymentIntentId,
-    });
-
-    // 8.1: Persist payment intent on the task for downstream completion flow
-    await TaskModel.findByIdAndUpdate(task._id, {
-      paymentIntentId: paymentResult.payment.stripePaymentIntentId,
-    });
-
-    // 9th: Send notification to freelancer about payment pending
-    const paymentPendingNotification = {
-      text: `Your bid for "${task.title}" is being processed. Payment is pending confirmation.`,
-      title: 'Payment Processing',
-      receiver: bid.taskerId,
-      type: 'PAYMENT_PENDING',
-      referenceId: bid._id,
-      isRead: false,
-    };
+    // 8th: Atomically accept bid and assign tasker to task
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
     try {
-      await sendNotifications(paymentPendingNotification);
-    } catch (err) {
-      console.error('Failed to send notification for payment pending:', err);
-    }
+      // 8.1: Accept the bid immediately so task moves to in-progress
+      const acceptedBid = await BidModel.findOneAndUpdate(
+        { _id: bid._id, status: BidStatus.PENDING },
+        {
+          $set: {
+            status: BidStatus.ACCEPTED,
+            paymentIntentId: paymentResult.payment.stripePaymentIntentId,
+          },
+        },
+        { session, new: true }
+      );
 
-    return { 
-      bid: { ...bid, status: BidStatus.PAYMENT_PENDING }, 
-      task, 
-      payment: paymentResult,
-      message: 'Payment initiated. Bid will be accepted once payment is confirmed.'
-    };
+      if (!acceptedBid) {
+        throw new ApiError(
+          StatusCodes.CONFLICT,
+          'Bid was already processed'
+        );
+      }
+
+      // 8.2: Update the task status and assignment
+      await TaskModel.findByIdAndUpdate(
+        task._id,
+        {
+          status: TaskStatus.IN_PROGRESS,
+          assignedTo: bid.taskerId,
+          paymentIntentId: paymentResult.payment.stripePaymentIntentId,
+        },
+        { session }
+      );
+
+      // 8.3: Reject all other bids for this task
+      await BidModel.updateMany(
+        { taskId: task._id, _id: { $ne: bid._id } },
+        { $set: { status: BidStatus.REJECTED } },
+        { session }
+      );
+
+      // 8.4: Commit transaction
+      await session.commitTransaction();
+      session.endSession();
+
+      // 9th: Notify freelancer about acceptance
+      const acceptedNotification = {
+        text: `Congratulations! Your bid for "${task.title}" has been accepted.`,
+        title: 'Bid Accepted',
+        receiver: bid.taskerId,
+        type: 'BID_ACCEPTED',
+        referenceId: bid._id,
+        isRead: false,
+      };
+
+      try {
+        await sendNotifications(acceptedNotification);
+      } catch (err) {
+        console.error('Failed to send notification for accepted bid:', err);
+      }
+
+      const updatedTask = await TaskModel.findById(task._id);
+      return {
+        bid: acceptedBid,
+        task: updatedTask,
+        payment: paymentResult,
+        message: 'Bid accepted and task moved to in-progress. Payment processing...'
+      };
+    } catch (txError) {
+      await session.abortTransaction();
+      session.endSession();
+      throw txError;
+    }
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';
     throw new ApiError(
       StatusCodes.INTERNAL_SERVER_ERROR,
-      `Failed to initiate payment for bid: ${errorMessage}`
+      `Failed to accept bid: ${errorMessage}`
     );
   }
 };
@@ -333,7 +374,21 @@ const completeBidAcceptance = async (bidId: string) => {
   // 2nd: Find the task associated with the bid
   const task = await findByIdOrThrow(TaskModel, bid.taskId, 'Task');
 
-  // 3rd: Ensure the bid is in payment_pending status
+  // 3rd: If bid is already accepted, ensure task state is correct and exit
+  if (bid.status === BidStatus.ACCEPTED) {
+    await TaskModel.findByIdAndUpdate(task._id, {
+      status: TaskStatus.IN_PROGRESS,
+      assignedTo: bid?.taskerId,
+    });
+    // Also ensure other bids are rejected
+    await BidModel.updateMany(
+      { taskId: task._id, _id: { $ne: bid._id } },
+      { $set: { status: BidStatus.REJECTED } }
+    );
+    return { bid, task };
+  }
+
+  // 3.1: Otherwise, proceed if we were still pending payment
   if (bid.status !== BidStatus.PAYMENT_PENDING) {
     throw new ApiError(
       StatusCodes.BAD_REQUEST,

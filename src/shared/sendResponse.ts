@@ -14,12 +14,16 @@ type IData<T> = {
 };
 
 const sendResponse = <T>(res: Response, data: IData<T>) => {
+  // 👇 store full response data for logger middleware
+  res.locals.responsePayload = data;
+
   const resData = {
     success: data.success,
     message: data.message,
     pagination: data.pagination,
     data: data.data,
   };
+
   res.status(data.statusCode).json(resData);
 };
 

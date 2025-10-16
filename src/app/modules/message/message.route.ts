@@ -1,7 +1,7 @@
 import express, { NextFunction, Request, Response } from 'express';
 import { USER_ROLES } from '../../../enums/user';
 import auth from '../../middlewares/auth';
-import { MessageController } from './message.controller';
+import { MessageController, MessageExtraController } from './message.controller';
 import { getMultipleFilesPath } from '../../../shared/getFilePath';
 import fileUploadHandler from '../../middlewares/fileUploadHandler';
 import { JwtPayload } from 'jsonwebtoken';
@@ -64,6 +64,20 @@ router.get(
   '/:id',
   auth(USER_ROLES.TASKER, USER_ROLES.POSTER),
   MessageController.getMessage
+);
+
+// Mark a single message as read
+router.post(
+  '/:id/read',
+  auth(USER_ROLES.TASKER, USER_ROLES.POSTER),
+  MessageExtraController.markMessageRead
+);
+
+// Mark all messages in a chat as read
+router.post(
+  '/chat/:chatId/read',
+  auth(USER_ROLES.TASKER, USER_ROLES.POSTER),
+  MessageExtraController.markChatRead
 );
 
 export const MessageRoutes = router;

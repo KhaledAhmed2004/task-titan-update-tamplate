@@ -2,6 +2,7 @@ import { IMessage } from '../message/message.interface';
 import { Message } from '../message/message.model';
 import { IChat } from './chat.interface';
 import { Chat } from './chat.model';
+import { isOnline, getLastActive } from '../../helpers/presenceHelper';
 
 const createChatToDB = async (payload: any): Promise<IChat> => {
   const isExistChat: IChat | null = await Chat.findOne({
@@ -43,9 +44,27 @@ const getChatFromDB = async (user: any, search: string): Promise<IChat[]> => {
         .sort({ createdAt: -1 })
         .select('text offer createdAt sender');
 
+      // Compute unread count for current user
+      const unreadCount = await Message.countDocuments({
+        chatId: chat?._id,
+        sender: { $ne: user.id },
+        readBy: { $ne: user.id },
+      });
+
+      // Presence of the other participant (first populated one)
+      const other = data?.participants?.[0];
+      let presence: { isOnline: boolean; lastActive?: number } | null = null;
+      if (other?._id) {
+        const online = await isOnline(String(other._id));
+        const last = await getLastActive(String(other._id));
+        presence = { isOnline: online, lastActive: last };
+      }
+
       return {
         ...data,
         lastMessage: lastMessage || null,
+        unreadCount,
+        presence,
       };
     })
   );
