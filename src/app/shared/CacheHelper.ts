@@ -15,12 +15,11 @@ export class CacheHelper {
 
   private constructor(options: ICacheOptions = {}) {
     this.cache = new NodeCache({
-      stdTTL: options.ttl || 600, // Default 10 minutes
-      checkperiod: options.checkperiod || 120, // Check every 2 minutes
+      stdTTL: options.ttl || 600,
+      checkperiod: options.checkperiod || 120,
       useClones: false,
     });
     this.redis = getRedisClient();
-    // Initialization log
     logger.info('🔹 CacheHelper initialized');
   }
 
@@ -31,118 +30,154 @@ export class CacheHelper {
     return CacheHelper.instance;
   }
 
-  // Basic cache operations
+  // ------------------- Basic Cache Operations -------------------
+
   async set<T>(key: string, value: T, ttl?: number): Promise<boolean> {
     const start = Date.now();
-    if (this.redis) {
-      const payload = JSON.stringify(value);
-      try {
-        logger.debug(`🔹 Cache SET key: ${key}`);
-        if (ttl && ttl > 0) {
-          await this.redis.set(key, payload, 'EX', ttl);
-        } else {
-          await this.redis.set(key, payload);
-        }
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+    const logPrefix = `[CACHE][SET] key:${key}`;
+    try {
+      if (this.redis) {
+        const payload = JSON.stringify(value);
+        if (ttl && ttl > 0) await this.redis.set(key, payload, 'EX', ttl);
+        else await this.redis.set(key, payload);
+
+        logger.info(
+          `${logPrefix} ✅ | TTL: ${ttl || 'default'} | ⏱ ${
+            Date.now() - start
+          }ms`
+        );
         return true;
-      } catch (e) {
-        errorLogger.error(`❌ Cache operation failed: ${(e as Error).message}`);
-        // Fallback to memory on error
-        const ok = this.cache.set(key, value, ttl || 0);
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-        return ok;
       }
+
+      const ok = this.cache.set(key, value, ttl || 0);
+      logger.info(
+        `${logPrefix} ✅ (memory) | TTL: ${ttl || 'default'} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return ok;
+    } catch (err) {
+      errorLogger.error(
+        `${logPrefix} ❌ | ${(err as Error).message} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      // Fallback to memory
+      const ok = this.cache.set(key, value, ttl || 0);
+      return ok;
     }
-    logger.debug(`🔹 Cache SET key: ${key}`);
-    const ok = this.cache.set(key, value, ttl || 0);
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-    return ok;
   }
 
   async get<T>(key: string): Promise<T | undefined> {
     const start = Date.now();
-    if (this.redis) {
-      try {
-        logger.debug(`🔹 Cache GET key: ${key}`);
+    const logPrefix = `[CACHE][GET] key:${key}`;
+    try {
+      if (this.redis) {
         const val = await this.redis.get(key);
         const parsed = val ? (JSON.parse(val) as T) : undefined;
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+        logger.info(
+          `${logPrefix} ${parsed ? 'HIT ✅' : 'MISS ⚠️'} | ⏱ ${
+            Date.now() - start
+          }ms`
+        );
         return parsed;
-      } catch (e) {
-        errorLogger.error(`❌ Cache operation failed: ${(e as Error).message}`);
-        const res = this.cache.get<T>(key);
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-        return res;
       }
+
+      const res = this.cache.get<T>(key);
+      logger.info(
+        `${logPrefix} ${res ? 'HIT ✅ (memory)' : 'MISS ⚠️ (memory)'} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return res;
+    } catch (err) {
+      errorLogger.error(
+        `${logPrefix} ❌ | ${(err as Error).message} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return this.cache.get<T>(key);
     }
-    logger.debug(`🔹 Cache GET key: ${key}`);
-    const res = this.cache.get<T>(key);
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-    return res;
   }
 
   async del(key: string | string[]): Promise<number> {
     const start = Date.now();
     const keys = Array.isArray(key) ? key : [key];
-    if (this.redis) {
-      try {
-        logger.debug(`🔹 Cache DEL key: ${keys.join(',')}`);
+    const logPrefix = `[CACHE][DEL] keys:${keys.join(',')}`;
+
+    try {
+      if (this.redis) {
         const res = await this.redis.del(...keys);
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-        return res;
-      } catch (e) {
-        errorLogger.error(`❌ Cache operation failed: ${(e as Error).message}`);
-        const res = this.cache.del(key);
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+        logger.info(`${logPrefix} ✅ | ⏱ ${Date.now() - start}ms`);
         return res;
       }
+
+      const res = this.cache.del(keys);
+      logger.info(`${logPrefix} ✅ (memory) | ⏱ ${Date.now() - start}ms`);
+      return res;
+    } catch (err) {
+      errorLogger.error(
+        `${logPrefix} ❌ | ${(err as Error).message} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return this.cache.del(keys);
     }
-    logger.debug(`🔹 Cache DEL key: ${keys.join(',')}`);
-    const res = this.cache.del(key);
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-    return res;
   }
 
   async has(key: string): Promise<boolean> {
     const start = Date.now();
-    if (this.redis) {
-      try {
-        logger.debug(`🔹 Cache HAS key: ${key}`);
+    const logPrefix = `[CACHE][HAS] key:${key}`;
+    try {
+      if (this.redis) {
         const exists = await this.redis.exists(key);
         const res = exists === 1;
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-        return res;
-      } catch (e) {
-        errorLogger.error(`❌ Cache operation failed: ${(e as Error).message}`);
-        const res = this.cache.has(key);
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+        logger.info(
+          `${logPrefix} ${res ? 'YES ✅' : 'NO ⚠️'} | ⏱ ${Date.now() - start}ms`
+        );
         return res;
       }
+
+      const res = this.cache.has(key);
+      logger.info(
+        `${logPrefix} ${res ? 'YES ✅ (memory)' : 'NO ⚠️ (memory)'} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return res;
+    } catch (err) {
+      errorLogger.error(
+        `${logPrefix} ❌ | ${(err as Error).message} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
+      return this.cache.has(key);
     }
-    logger.debug(`🔹 Cache HAS key: ${key}`);
-    const res = this.cache.has(key);
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-    return res;
   }
 
   async flush(): Promise<void> {
     const start = Date.now();
+    const logPrefix = `[CACHE][FLUSH]`;
     try {
       if (this.redis) {
-        logger.debug('🔹 Cache FLUSH');
         await this.redis.flushdb();
-        logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+        logger.info(`${logPrefix} ✅ | ⏱ ${Date.now() - start}ms`);
         return;
       }
-    } catch (e) {
-      errorLogger.error(`❌ Cache operation failed: ${(e as Error).message}`);
+    } catch (err) {
+      errorLogger.error(
+        `${logPrefix} ❌ | ${(err as Error).message} | ⏱ ${
+          Date.now() - start
+        }ms`
+      );
     }
-    logger.debug('🔹 Cache FLUSH (memory)');
+
     this.cache.flushAll();
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+    logger.info(`${logPrefix} ✅ (memory) | ⏱ ${Date.now() - start}ms`);
   }
 
-  // Advanced operations
+  // ------------------- Advanced Operations -------------------
+
   async getOrSet<T>(
     key: string,
     fetchFunction: () => Promise<T>,
@@ -150,20 +185,16 @@ export class CacheHelper {
   ): Promise<T> {
     const start = Date.now();
     const cached = await this.get<T>(key);
-    if (cached !== undefined) {
-      logger.debug(`🔹 Cache HIT key: ${key}`);
-      logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
-    logger.debug(`🔹 Cache MISS key: ${key}`);
     const fresh = await fetchFunction();
     await this.set(key, fresh, ttl);
-    logger.info(`⏱️ Cache operation took: ${Date.now() - start}ms`);
+    logger.info(
+      `[CACHE][GETORSET] key:${key} ✅ (fresh) | ⏱ ${Date.now() - start}ms`
+    );
     return fresh;
   }
 
-  // Cache with tags for group invalidation
   async setWithTags<T>(
     key: string,
     value: T,
@@ -189,105 +220,21 @@ export class CacheHelper {
     const taggedKeys = (await this.get<string[]>(tagKey)) || [];
     const deletedCount = await this.del(taggedKeys);
     await this.del(tagKey);
+    logger.info(`[CACHE][INVALIDATE TAG] tag:${tag} deleted:${deletedCount}`);
     return deletedCount;
   }
 
-  // Common cache patterns
-  async cacheUserData<T>(
-    userId: string,
-    data: T,
-    ttl: number = 1800
-  ): Promise<boolean> {
-    return this.setWithTags(`user:${userId}`, data, ['users'], ttl);
-  }
+  // ------------------- Utility -------------------
 
-  async cacheTaskData<T>(
-    taskId: string,
-    data: T,
-    ttl: number = 900
-  ): Promise<boolean> {
-    return this.setWithTags(`task:${taskId}`, data, ['tasks'], ttl);
-  }
-
-  async cacheCategoryData<T>(
-    categoryId: string,
-    data: T,
-    ttl: number = 3600
-  ): Promise<boolean> {
-    return this.setWithTags(
-      `category:${categoryId}`,
-      data,
-      ['categories'],
-      ttl
-    );
-  }
-
-  async cacheSearchResults<T>(
-    searchKey: string,
-    results: T,
-    ttl: number = 300
-  ): Promise<boolean> {
-    return this.setWithTags(`search:${searchKey}`, results, ['search'], ttl);
-  }
-
-  // Invalidation helpers
-  async invalidateUser(userId: string): Promise<number> {
-    return this.del(`user:${userId}`);
-  }
-
-  async invalidateTask(taskId: string): Promise<number> {
-    return this.del(`task:${taskId}`);
-  }
-
-  async invalidateAllUsers(): Promise<number> {
-    return this.invalidateByTag('users');
-  }
-
-  async invalidateAllTasks(): Promise<number> {
-    return this.invalidateByTag('tasks');
-  }
-
-  async invalidateAllCategories(): Promise<number> {
-    return this.invalidateByTag('categories');
-  }
-
-  async invalidateAllSearches(): Promise<number> {
-    return this.invalidateByTag('search');
-  }
-
-  // Statistics
   getStats() {
-    // Redis stats not implemented; return NodeCache stats for fallback
     return this.cache.getStats();
   }
 
   getKeys(): string[] {
-    // Redis keys listing is not exposed to avoid performance issues
     return this.cache.keys();
   }
 
-  // Utility methods
   generateCacheKey(...parts: (string | number)[]): string {
     return parts.join(':');
-  }
-
-  // Middleware for Express
-  cacheMiddleware(ttl: number = 300) {
-    return async (req: any, res: any, next: any) => {
-      const key = this.generateCacheKey('route', req.originalUrl);
-      const cached = await this.get(key);
-
-      if (cached !== undefined) {
-        return res.json(cached);
-      }
-
-      const originalSend = res.json;
-      res.json = async (data: any) => {
-        await this.set(key, data, ttl);
-        return originalSend.call(res, data);
-      };
-
-      next();
-    };
   }
 }

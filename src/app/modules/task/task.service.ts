@@ -17,6 +17,7 @@ import { Bookmark } from '../bookmark/bookmark.model';
 import { Rating } from '../rating';
 import { DisputeType } from '../dispute/dispute.interface';
 import AggregationBuilder from '../../builder/AggregationBuilder';
+import { CacheHelper } from '../../shared/CacheHelper';
 
 // Temporary DisputeService implementation until the full service is uncommented
 const DisputeService = {
@@ -33,7 +34,7 @@ const DisputeService = {
       status: 'open',
       createdAt: new Date(),
     };
-  }
+  },
 };
 
 const createTask = async (task: Task) => {
@@ -47,60 +48,123 @@ const createTask = async (task: Task) => {
   return result;
 };
 
-const getAllTasks = async (query: Record<string, unknown>, userId?: string) => {
-  // Step 1: Build query (always lean for performance)
+// const getAllTasks = async (query: Record<string, unknown>, userId?: string) => {
+//   // Step 1: Build query (always lean for performance)
+//   const taskQuery = new QueryBuilder(TaskModel.find().lean(), query)
+//     .search(['title', 'description'])
+//     .filter()
+//     .locationFilter() // Add location-based filtering
+//     .dateFilter()
+//     .sort()
+//     .paginate()
+//     .fields();
+
+//   // Step 2: Prepare promises (tasks + pagination)
+//   const promises: Promise<any>[] = [
+//     taskQuery.modelQuery, // already lean()
+//     taskQuery.getPaginationInfo(),
+//   ];
+
+//   // Add bookmark query only if logged in
+//   if (userId) {
+//     promises.push(
+//       Bookmark.find({ user: userId })
+//         .select('post -_id') // only select needed field
+//         .lean() // lightweight result
+//     );
+//   }
+
+//   // Step 3: Run all queries in parallel
+//   const results = await Promise.all(promises);
+
+//   const tasks: Task[] = results[0];
+//   const paginationInfo = results[1];
+//   const bookmarks = userId ? results[2] : [];
+
+//   // Step 4: Early return if no tasks
+//   if (!tasks.length) {
+//     return {
+//       pagination: paginationInfo,
+//       data: [],
+//     };
+//   }
+
+//   // Step 5: Convert bookmarks into Set for O(1) lookup
+//   const bookmarkedIds = new Set((bookmarks as any[]).map(b => String(b.post)));
+
+//   // Step 6: Enrich tasks
+//   const enrichedTasks = tasks.map((task: Task) => ({
+//     ...task,
+//     isBookmarked: bookmarkedIds.has(String(task._id)),
+//   }));
+
+//   return {
+//     pagination: paginationInfo,
+//     data: enrichedTasks,
+//   };
+// };
+
+const cache = CacheHelper.getInstance({ ttl: 600 });
+
+export const getAllTasks = async (
+  query: Record<string, unknown>,
+  userId?: string
+) => {
+  const cacheKey = cache.generateCacheKey(
+    'tasks',
+    userId || 'guest',
+    JSON.stringify(query)
+  );
+
+  // 1️⃣ Try cache first
+  const cachedData = await cache.get(cacheKey);
+  console.log('cash data: ', cachedData);
+  if (cachedData) return cachedData;
+  console.log('cache not found');
+
+  // 2️⃣ Build and run DB query
   const taskQuery = new QueryBuilder(TaskModel.find().lean(), query)
     .search(['title', 'description'])
     .filter()
-    .locationFilter() // Add location-based filtering
+    .locationFilter()
     .dateFilter()
     .sort()
     .paginate()
     .fields();
 
-  // Step 2: Prepare promises (tasks + pagination)
   const promises: Promise<any>[] = [
-    taskQuery.modelQuery, // already lean()
+    taskQuery.modelQuery,
     taskQuery.getPaginationInfo(),
   ];
 
-  // Add bookmark query only if logged in
   if (userId) {
-    promises.push(
-      Bookmark.find({ user: userId })
-        .select('post -_id') // only select needed field
-        .lean() // lightweight result
-    );
+    promises.push(Bookmark.find({ user: userId }).select('post -_id').lean());
   }
 
-  // Step 3: Run all queries in parallel
   const results = await Promise.all(promises);
 
   const tasks: Task[] = results[0];
   const paginationInfo = results[1];
   const bookmarks = userId ? results[2] : [];
 
-  // Step 4: Early return if no tasks
   if (!tasks.length) {
-    return {
-      pagination: paginationInfo,
-      data: [],
-    };
+    const emptyResponse = { pagination: paginationInfo, data: [] };
+    await cache.set(cacheKey, emptyResponse, 300);
+    return emptyResponse;
   }
 
-  // Step 5: Convert bookmarks into Set for O(1) lookup
   const bookmarkedIds = new Set((bookmarks as any[]).map(b => String(b.post)));
-
-  // Step 6: Enrich tasks
   const enrichedTasks = tasks.map((task: Task) => ({
     ...task,
     isBookmarked: bookmarkedIds.has(String(task._id)),
   }));
 
-  return {
-    pagination: paginationInfo,
-    data: enrichedTasks,
-  };
+  const finalResponse = { pagination: paginationInfo, data: enrichedTasks };
+
+  // 3️⃣ Save in cache with tag
+  await cache.setWithTags(cacheKey, finalResponse, ['tasks'], 600);
+
+  return finalResponse;
 };
 
 const getTaskById = async (taskId: string) => {
@@ -699,9 +763,9 @@ const cancelTask = async (
     }
 
     // Direct cancellation - refund payment if exists
-    const payment = await PaymentModel.findOne({ 
+    const payment = await PaymentModel.findOne({
       taskId: new mongoose.Types.ObjectId(taskId),
-      status: { $in: [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.HELD] }
+      status: { $in: [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.HELD] },
     });
 
     if (payment) {

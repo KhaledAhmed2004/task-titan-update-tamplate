@@ -240,48 +240,6 @@ class AggregationBuilder<T> {
   }
 
   // ====== TIME TRENDS ======
-  // async getTimeTrends(options: {
-  //   sumField?: string;
-  //   timeUnit: 'day' | 'week' | 'month' | 'year';
-  //   filter?: Record<string, any>;
-  //   limit?: number;
-  // }) {
-  //   const { sumField, timeUnit, filter = {}, limit = 12 } = options;
-
-  //   const dateGrouping = {
-  //     day: {
-  //       year: { $year: '$createdAt' },
-  //       month: { $month: '$createdAt' },
-  //       day: { $dayOfMonth: '$createdAt' },
-  //     },
-  //     week: { year: { $year: '$createdAt' }, week: { $week: '$createdAt' } },
-  //     month: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-  //     year: { year: { $year: '$createdAt' } },
-  //   };
-
-  //   this.pipeline = [
-  //     { $match: filter },
-  //     {
-  //       $group: {
-  //         _id: dateGrouping[timeUnit],
-  //         total: sumField ? { $sum: `$${sumField}` } : { $sum: 1 },
-  //         count: { $sum: 1 },
-  //       },
-  //     },
-  //     {
-  //       $sort: {
-  //         '_id.year': -1,
-  //         '_id.month': -1,
-  //         '_id.week': -1,
-  //         '_id.day': -1,
-  //       },
-  //     },
-  //     { $limit: limit },
-  //   ];
-
-  //   return await this.execute();
-  // }
-
   async getTimeTrends(options: {
     sumField?: string;
     timeUnit: 'day' | 'week' | 'month' | 'year';

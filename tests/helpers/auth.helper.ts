@@ -1,7 +1,7 @@
 import request from 'supertest';
 
 // Configuration constants
-export const BACKEND_URL = 'http://10.10.7.33:5000';
+export const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5002';
 export const API_BASE = '/api/v1';
 
 export interface AuthenticatedUser {
@@ -49,10 +49,19 @@ export const requestVerificationOTP = async (email: string): Promise<string> => 
     .send({ email });
   
   if (response.status === 200 && response.body.success) {
-    // Extract OTP from response message if available
+    // Prefer OTP from response data
+    const otpFromData = response.body?.data?.otp || response.body?.data;
+    if (typeof otpFromData === 'string') {
+      const match = otpFromData.match(/\d{4,6}/);
+      return match ? match[0] : '';
+    }
+    if (typeof otpFromData === 'number') {
+      return String(otpFromData);
+    }
+    // Fallback: attempt to parse any digits from message
     const message = response.body.message || '';
-    const otpMatch = message.match(/(\d{4})/);
-    return otpMatch ? otpMatch[1] : '';
+    const otpMatch = message.match(/\d{4,6}/);
+    return otpMatch ? otpMatch[0] : '';
   }
   throw new Error(`Failed to request OTP: ${response.body?.message || 'Unknown error'}`);
 };
@@ -104,13 +113,13 @@ export const completeUserVerification = async (email: string): Promise<boolean> 
 export const createAndAuthenticateTestUser = async (userData: TestUserData): Promise<AuthenticatedUser> => {
   // First try to register the user
   const registerResponse = await request(BACKEND_URL)
-    .post(`${API_BASE}/users`)
+    .post(`${API_BASE}/user`)
     .send(userData);
   
   let userId;
   if (registerResponse.status === 201) {
     userId = registerResponse.body.data._id;
-  } else if (registerResponse.status === 400 && registerResponse.body.message?.includes('already exists')) {
+  } else if ((registerResponse.status === 400 || registerResponse.status === 409) && /already\s*exist/i.test(registerResponse.body?.message || '')) {
     // User already exists, try to authenticate directly
     try {
       const token = await authenticateWithRealBackend(userData.email, userData.password);

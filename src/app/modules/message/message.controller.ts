@@ -30,20 +30,6 @@ const getMessage = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-export const MessageController = { sendMessage, getMessage };
-
-const markMessageRead = catchAsync(async (req: Request, res: Response) => {
-  const messageId = req.params.id;
-  const userId = (req.user as JwtPayload).id as string;
-  const updated = await MessageService.markAsReadMessage(messageId, userId);
-  sendResponse(res, {
-    statusCode: StatusCodes.OK,
-    success: true,
-    message: 'Message marked as read',
-    data: updated,
-  });
-});
-
 const markChatRead = catchAsync(async (req: Request, res: Response) => {
   const chatId = req.params.chatId;
   const userId = (req.user as JwtPayload).id as string;
@@ -56,4 +42,4 @@ const markChatRead = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-export const MessageExtraController = { markMessageRead, markChatRead };
+export const MessageController = { sendMessage, getMessage, markChatRead };

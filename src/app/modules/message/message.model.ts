@@ -31,6 +31,11 @@ const messageSchema = new Schema<IMessage, MessageModel>(
     docs: { type: [String], default: [] },
     deliveredTo: [{ type: Schema.Types.ObjectId, ref: 'User', default: [] }],
     readBy: [{ type: Schema.Types.ObjectId, ref: 'User', default: [] }],
+    status: {
+    type: String,
+    enum: ['sent', 'delivered', 'seen'],
+    default: 'sent',
+  },
     editedAt: { type: Date },
   },
   {

@@ -10,6 +10,7 @@ export type IMessage = {
   docs?: string[];
   deliveredTo?: Types.ObjectId[];
   readBy?: Types.ObjectId[];
+  status?: 'sent' | 'delivered' | 'seen';
   editedAt?: Date;
 };
 

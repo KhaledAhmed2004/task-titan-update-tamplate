@@ -38,7 +38,9 @@ const sendMessageToDB = async (payload: any): Promise<IMessage> => {
     const participants = (chat?.participants || [])
       .map(p => String(p))
       .filter(Boolean);
-    const receivers = participants.filter(p => String(p) !== String(response.sender));
+    const receivers = participants.filter(
+      p => String(p) !== String(response.sender)
+    );
 
     for (const receiverId of receivers) {
       const online = await isOnline(receiverId);
@@ -114,27 +116,42 @@ const markAsDelivered = async (messageId: string, userId: string) => {
   return updated;
 };
 
-const markAsReadMessage = async (messageId: string, userId: string) => {
-  if (!mongoose.Types.ObjectId.isValid(messageId)) {
-    throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid Message ID');
-  }
-  const updated = await Message.findByIdAndUpdate(
-    messageId,
-    { $addToSet: { readBy: userId } },
-    { new: true }
-  );
-  return updated;
-};
-
 const markChatAsRead = async (chatId: string, userId: string) => {
   if (!mongoose.Types.ObjectId.isValid(chatId)) {
     throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid Chat ID');
   }
-  const result = await Message.updateMany(
-    { chatId, sender: { $ne: userId }, readBy: { $ne: userId } },
+
+  // Find messages that will be marked as read
+  const toUpdate = await Message.find({
+    chatId,
+    sender: { $ne: userId },
+    readBy: { $ne: userId },
+  }).select('_id chatId');
+
+  if (!toUpdate.length) {
+    return { modifiedCount: 0, updatedIds: [] } as any;
+  }
+
+  // Mark them as read for this user
+  await Message.updateMany(
+    { _id: { $in: toUpdate.map(m => m._id) } },
     { $addToSet: { readBy: userId } }
   );
-  return { modifiedCount: result.modifiedCount };
+
+  // Emit real-time MESSAGE_READ for each updated message to the chat room
+  // @ts-ignore
+  const io = global.io;
+  if (io) {
+    for (const msg of toUpdate) {
+      io.to(`chat::${String(chatId)}`).emit('MESSAGE_READ', {
+        messageId: String(msg._id),
+        chatId: String(chatId),
+        userId,
+      });
+    }
+  }
+
+  return { modifiedCount: toUpdate.length, updatedIds: toUpdate.map(m => String(m._id)) } as any;
 };
 
 const getUnreadCount = async (chatId: string, userId: string) => {
@@ -150,7 +167,6 @@ export const MessageService = {
   sendMessageToDB,
   getMessageFromDB,
   markAsDelivered,
-  markAsReadMessage,
   markChatAsRead,
   getUnreadCount,
 };

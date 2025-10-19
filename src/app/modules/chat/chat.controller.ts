@@ -7,7 +7,7 @@ import { JwtPayload } from 'jsonwebtoken';
 
 const createChat = catchAsync(async (req: Request, res: Response) => {
   const user = req.user as JwtPayload;
-  const otherUser = req.params.id;
+  const otherUser = req.params.otherUserId;
 
   const participants = [user?.id, otherUser];
   console.log('participants', participants);

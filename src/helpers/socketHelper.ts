@@ -10,6 +10,7 @@ import {
   addUserRoom,
   removeUserRoom,
   updateLastActive,
+  getUserRooms,
 } from '../app/helpers/presenceHelper';
 
 const USER_ROOM = (userId: string) => `user::${userId}`;
@@ -56,6 +57,9 @@ const socket = (io: Server) => {
         if (!chatId) return;
         socket.join(CHAT_ROOM(chatId));
         await addUserRoom(userId, chatId);
+        await updateLastActive(userId);
+        // Broadcast presence to the chat room
+        io.to(CHAT_ROOM(chatId)).emit('USER_ONLINE', { userId, chatId, lastActive: Date.now() });
         logger.info(colors.green(`User ${userId} joined chat room ${CHAT_ROOM(chatId)}`));
         logger.info(`🔔 Event processed: JOIN_CHAT for chat_id: ${chatId}`);
       });
@@ -65,6 +69,8 @@ const socket = (io: Server) => {
         if (!chatId) return;
         socket.leave(CHAT_ROOM(chatId));
         await removeUserRoom(userId, chatId);
+        await updateLastActive(userId);
+        io.to(CHAT_ROOM(chatId)).emit('USER_OFFLINE', { userId, chatId, lastActive: Date.now() });
         logger.info(colors.yellow(`User ${userId} left chat room ${CHAT_ROOM(chatId)}`));
         logger.info(`🔔 Event processed: LEAVE_CHAT for chat_id: ${chatId}`);
       });
@@ -73,11 +79,13 @@ const socket = (io: Server) => {
       socket.on('TYPING_START', ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
         io.to(CHAT_ROOM(chatId)).emit('TYPING_START', { userId, chatId });
+        updateLastActive(userId).catch(() => {});
         logger.info(`🔔 Event processed: TYPING_START for chat_id: ${chatId}`);
       });
       socket.on('TYPING_STOP', ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
         io.to(CHAT_ROOM(chatId)).emit('TYPING_STOP', { userId, chatId });
+        updateLastActive(userId).catch(() => {});
         logger.info(`🔔 Event processed: TYPING_STOP for chat_id: ${chatId}`);
       });
 
@@ -95,6 +103,7 @@ const socket = (io: Server) => {
               chatId: String(msg.chatId),
               userId,
             });
+            updateLastActive(userId).catch(() => {});
             logger.info(`🔔 Event processed: DELIVERED_ACK for message_id: ${String(msg._id)}`);
           }
         } catch (err) {
@@ -116,6 +125,7 @@ const socket = (io: Server) => {
               chatId: String(msg.chatId),
               userId,
             });
+            updateLastActive(userId).catch(() => {});
             logger.info(`🔔 Event processed: READ_ACK for message_id: ${String(msg._id)}`);
           }
         } catch (err) {
@@ -127,6 +137,18 @@ const socket = (io: Server) => {
       socket.on('disconnect', async () => {
         try {
           await setOffline(userId);
+          await updateLastActive(userId);
+          // Notify all chat rooms this user participated in
+          try {
+            const rooms = await getUserRooms(userId);
+            for (const chatId of rooms || []) {
+              io.to(CHAT_ROOM(String(chatId))).emit('USER_OFFLINE', {
+                userId,
+                chatId: String(chatId),
+                lastActive: Date.now(),
+              });
+            }
+          } catch {}
         } catch {}
         logger.info(colors.red(`User ${userId} disconnected`));
         logger.info(`🔔 Event processed: socket_disconnected for user_id: ${userId}`);

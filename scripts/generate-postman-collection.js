@@ -404,14 +404,18 @@ class PostmanCollectionGenerator {
         },
         '/verify-email': {
           token: '{{VERIFY_TOKEN}}',
-          email: '{{TEST_EMAIL}}'
+          email: '{{TEST_EMAIL}}',
         },
         '/resend-verify-email': {
-          email: '{{TEST_EMAIL}}'
-        }
+          email: '{{TEST_EMAIL}}',
+        },
       },
       user: {
-        '/': { name: '{{TEST_NAME}}', email: '{{TEST_EMAIL}}', role: '{{USER_ROLE}}' },
+        '/': {
+          name: '{{TEST_NAME}}',
+          email: '{{TEST_EMAIL}}',
+          role: '{{USER_ROLE}}',
+        },
         '/profile': { name: '{{UPDATED_NAME}}', bio: '{{USER_BIO}}' },
       },
       task: {
@@ -419,9 +423,9 @@ class PostmanCollectionGenerator {
           title: '{{TASK_TITLE}}',
           description: '{{TASK_DESCRIPTION}}',
           budget: '{{TASK_BUDGET}}',
-          deadline: '{{TASK_DEADLINE}}'
-        }
-      }
+          deadline: '{{TASK_DEADLINE}}',
+        },
+      },
     };
 
     if (sampleBodies[moduleName] && sampleBodies[moduleName][route.path]) {
@@ -456,7 +460,11 @@ class PostmanCollectionGenerator {
       { key: 'UPDATED_NAME', value: 'Updated Name', type: 'string' },
       { key: 'USER_BIO', value: 'This is my bio', type: 'string' },
       { key: 'TASK_TITLE', value: 'Sample Task Title', type: 'string' },
-      { key: 'TASK_DESCRIPTION', value: 'Sample task description', type: 'string' },
+      {
+        key: 'TASK_DESCRIPTION',
+        value: 'Sample task description',
+        type: 'string',
+      },
       { key: 'TASK_BUDGET', value: '100', type: 'string' },
       { key: 'TASK_DEADLINE', value: '2024-12-31', type: 'string' },
     ];
@@ -504,8 +512,7 @@ class PostmanCollectionGenerator {
               SUPER_ADMIN_PASSWORD: 'admin123',
               GOOGLE_CLIENT_ID: 'your-google-client-id',
               GOOGLE_CLIENT_SECRET: 'your-google-client-secret',
-              GOOGLE_REDIRECT_URI:
-                '{{BASE_URL}}/auth/google/callback',
+              GOOGLE_REDIRECT_URI: '{{BASE_URL}}/auth/google/callback',
             };
 
             envVars.push({
