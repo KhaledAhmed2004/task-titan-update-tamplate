@@ -71,13 +71,22 @@ const fileUploadHandler = () => {
         );
       }
     } else if (file.fieldname === 'media') {
-      if (file.mimetype === 'video/mp4' || file.mimetype === 'audio/mpeg') {
+      const allowed = [
+        'video/mp4',
+        'video/webm',
+        'audio/mpeg',
+        'audio/webm',
+        'audio/ogg',
+        'audio/wav',
+        'audio/mp4',
+      ];
+      if (allowed.includes(file.mimetype)) {
         cb(null, true);
       } else {
         cb(
           new ApiError(
             StatusCodes.BAD_REQUEST,
-            'Only .mp4, .mp3, file supported'
+            'Only mp4/webm (video) and mp3/webm/ogg/wav/mp4 (audio) supported'
           )
         );
       }

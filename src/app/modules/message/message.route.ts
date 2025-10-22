@@ -43,12 +43,20 @@ router.post(
         type = 'text';
       }
 
+      const attachments = [
+        ...images.map(u => ({ type: 'image', url: u, name: String(u).split('/').pop() })),
+        ...media.map(u => {
+          const lower = String(u).toLowerCase();
+          const isVideo = lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.mov');
+          return { type: isVideo ? 'video' : 'audio', url: u, name: String(u).split('/').pop() };
+        }),
+        ...docs.map(u => ({ type: 'file', url: u, name: String(u).split('/').pop() })),
+      ];
+
       req.body = {
         ...req.body,
         sender: (req?.user as JwtPayload).id,
-        images,
-        media,
-        docs,
+        attachments,
         type,
       };
 

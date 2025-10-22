@@ -22,11 +22,11 @@ const getChatFromDB = async (user: any, search: string): Promise<IChat[]> => {
       path: 'participants',
       select: '_id name image',
       match: {
-        _id: { $ne: user.id }, // Exclude user.id in the populated participants
-        ...(search && { name: { $regex: search, $options: 'i' } }), // Apply $regex only if search is valid
+        _id: { $ne: user.id },
+        ...(search && { name: { $regex: search, $options: 'i' } }),
       },
     })
-    .select('participants status');
+    .select('participants status updatedAt');
 
   // Filter out chats where no participants match the search (empty participants)
   const filteredChats = chats?.filter(
@@ -56,9 +56,17 @@ const getChatFromDB = async (user: any, search: string): Promise<IChat[]> => {
       let presence: { isOnline: boolean; lastActive?: number } | null = null;
       if (other?._id) {
         const online = await isOnline(String(other._id));
-        const last = await getLastActive(String(other._id));
+        let last = await getLastActive(String(other._id));
+        if (last === undefined) {
+          if (lastMessage?.createdAt) {
+            last = new Date(String(lastMessage.createdAt)).getTime();
+          } else if (data?.updatedAt) {
+            last = new Date(String(data.updatedAt)).getTime();
+          }
+        }
         presence = { isOnline: online, lastActive: last };
       }
+
 
       return {
         ...data,

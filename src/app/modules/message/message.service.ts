@@ -10,6 +10,11 @@ import { isOnline } from '../../helpers/presenceHelper';
 import { sendNotifications } from '../notification/notificationsHelper';
 
 const sendMessageToDB = async (payload: any): Promise<IMessage> => {
+  // Ensure attachments is always an array
+  if (!Array.isArray(payload.attachments)) {
+    payload.attachments = [];
+  }
+
   // save to DB
   const response = await Message.create(payload);
 
@@ -25,9 +30,7 @@ const sendMessageToDB = async (payload: any): Promise<IMessage> => {
       sender: String(response.sender),
       text: response.text,
       type: response.type,
-      images: response.images,
-      media: response.media,
-      docs: response.docs,
+      attachments: response.attachments,
       createdAt: response.createdAt,
     });
   }
