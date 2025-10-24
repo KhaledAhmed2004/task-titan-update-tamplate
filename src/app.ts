@@ -39,6 +39,7 @@
 
 // //file retrieve
 // app.use(express.static('uploads'));
+// app.use('/uploads', express.static('uploads'));
 
 // // Load your swagger.yml from the public folder
 // const swaggerDocument = YAML.load(
@@ -279,6 +280,7 @@ app.use(requestLogger);
 // Static files
 // -------------------
 app.use(express.static('uploads'));
+app.use('/uploads', express.static('uploads'));
 
 // -------------------
 // Swagger

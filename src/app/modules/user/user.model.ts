@@ -49,7 +49,7 @@ const userSchema = new Schema<IUser>(
       type: String,
       trim: true,
     },
-    image: {
+    profilePicture: {
       type: String,
       default: 'https://i.ibb.co/z5YHLV9/profile.png',
     },

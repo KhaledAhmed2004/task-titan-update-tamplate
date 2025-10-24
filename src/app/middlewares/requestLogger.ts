@@ -116,12 +116,33 @@ const extractFilesInfo = (req: Request) => {
 
   if (req.file) return formatFile(req.file);
   if (req.files) {
-    const out: Record<string, any> = {};
-    for (const [key, value] of Object.entries(req.files)) {
-      if (Array.isArray(value)) out[key] = value.map(formatFile);
-      else out[key] = formatFile(value);
+    // Handle both array format (from .any()) and object format (from .fields())
+    if (Array.isArray(req.files)) {
+      // Group files by fieldname when using .any()
+      const grouped: Record<string, any> = {};
+      for (const file of req.files) {
+        const fieldName = file.fieldname;
+        if (!grouped[fieldName]) {
+          grouped[fieldName] = [];
+        }
+        grouped[fieldName].push(formatFile(file));
+      }
+      
+      // Convert single-item arrays to single objects for cleaner output
+      const out: Record<string, any> = {};
+      for (const [fieldName, files] of Object.entries(grouped)) {
+        out[fieldName] = files.length === 1 ? files[0] : files;
+      }
+      return out;
+    } else {
+      // Handle object format (from .fields())
+      const out: Record<string, any> = {};
+      for (const [key, value] of Object.entries(req.files)) {
+        if (Array.isArray(value)) out[key] = value.map(formatFile);
+        else out[key] = formatFile(value);
+      }
+      return out;
     }
-    return out;
   }
   return undefined;
 };

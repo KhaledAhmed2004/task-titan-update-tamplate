@@ -18,7 +18,7 @@ export type IUser = {
   gender: 'male' | 'female';
   dateOfBirth: string;
   phone: string;
-  image?: string;
+  profilePicture?: string;
   status: USER_STATUS;
   verified: boolean;
   deviceTokens?: string[];

@@ -4,16 +4,14 @@ import config from '../../config';
 import ApiError from '../../errors/ApiError';
 import handleValidationError from '../../errors/handleValidationError';
 import handleZodError from '../../errors/handleZodError';
+import handleCastError from '../../errors/handleCastError';
 import { errorLogger } from '../../shared/logger';
 import { IErrorMessage } from '../../types/errors.types';
-import handleCastError from '../../errors/handleCastError';
 
 const globalErrorHandler: ErrorRequestHandler = (error, req, res, next) => {
   // config.node_env === 'development'
   //   ? console.log('🚨 globalErrorHandler ~~ ', error)
   //   : errorLogger.error('🚨 globalErrorHandler ~~ ', error);
-
-  // ✅ Log error using logger only, no console.log anywhere
   errorLogger.error('🚨 globalErrorHandler ~~ ', error);
 
   let statusCode = 500;
@@ -31,7 +29,6 @@ const globalErrorHandler: ErrorRequestHandler = (error, req, res, next) => {
     message = simplifiedError.message;
     errorMessages = simplifiedError.errorMessages;
   } else if (error.name === 'CastError') {
-    // ✅ new block
     const simplifiedError = handleCastError(error);
     statusCode = simplifiedError.statusCode;
     message = simplifiedError.message;
@@ -44,47 +41,26 @@ const globalErrorHandler: ErrorRequestHandler = (error, req, res, next) => {
     const duplicatedField = Object.keys((error as any).keyValue)[0];
     message = `${duplicatedField} already exists`;
     errorMessages = [
-      {
-        path: duplicatedField,
-        message: `${duplicatedField} must be unique`,
-      },
+      { path: duplicatedField, message: `${duplicatedField} must be unique` },
     ];
   } else if (error.name === 'TokenExpiredError') {
     statusCode = StatusCodes.UNAUTHORIZED;
     message = 'Session Expired';
-    errorMessages = error?.message
-      ? [
-          {
-            path: '',
-            message:
-              'Your session has expired. Please log in again to continue.',
-          },
-        ]
-      : [];
+    errorMessages = [
+      {
+        path: '',
+        message: 'Your session has expired. Please log in again to continue.',
+      },
+    ];
   } else if (error instanceof ApiError) {
     statusCode = error.statusCode;
     message = error.message;
-    errorMessages = error.message
-      ? [
-          {
-            path: '',
-            message: error.message,
-          },
-        ]
-      : [];
+    errorMessages = error.message ? [{ path: '', message: error.message }] : [];
   } else if (error instanceof Error) {
     message = error.message;
-    errorMessages = error.message
-      ? [
-          {
-            path: '',
-            message: error?.message,
-          },
-        ]
-      : [];
+    errorMessages = error.message ? [{ path: '', message: error.message }] : [];
   }
 
-  // ✅ Store for logger middleware
   res.locals.responsePayload = {
     success: false,
     statusCode,

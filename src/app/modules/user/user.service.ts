@@ -66,9 +66,14 @@ const updateProfileToDB = async (
     throw new ApiError(StatusCodes.BAD_REQUEST, "User doesn't exist!");
   }
 
+  // //unlink file here
+  // if (payload.image) {
+  //   unlinkFile(isExistUser.image);
+  // }
+
   //unlink file here
-  if (payload.image) {
-    unlinkFile(isExistUser.image);
+  if (payload.profilePicture) {
+    unlinkFile(isExistUser.profilePicture);
   }
 
   const updateDoc = await User.findOneAndUpdate({ _id: id }, payload, {

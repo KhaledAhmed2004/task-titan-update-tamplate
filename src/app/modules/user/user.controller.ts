@@ -31,15 +31,30 @@ const getUserProfile = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+// const updateProfile = catchAsync(async (req: Request, res: Response) => {
+//   const user = req.user;
+//   let image = getSingleFilePath(req.files, 'image');
+
+//   const data = {
+//     image,
+//     ...req.body,
+//   };
+//   const result = await UserService.updateProfileToDB(user as JwtPayload, data);
+
+//   sendResponse(res, {
+//     success: true,
+//     statusCode: StatusCodes.OK,
+//     message: 'Profile updated successfully',
+//     data: result,
+//   });
+// });
 const updateProfile = catchAsync(async (req: Request, res: Response) => {
   const user = req.user;
-  let image = getSingleFilePath(req.files, 'image');
 
-  const data = {
-    image,
-    ...req.body,
-  };
-  const result = await UserService.updateProfileToDB(user as JwtPayload, data);
+  // All files + text data are in req.body
+  const payload = { ...req.body };
+
+  const result = await UserService.updateProfileToDB(user as JwtPayload, payload);
 
   sendResponse(res, {
     success: true,
@@ -48,6 +63,7 @@ const updateProfile = catchAsync(async (req: Request, res: Response) => {
     data: result,
   });
 });
+
 
 const getAllUsers = catchAsync(async (req: Request, res: Response) => {
   const result = await UserService.getAllUsers(req.query);
