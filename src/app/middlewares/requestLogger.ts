@@ -120,8 +120,8 @@ const extractFilesInfo = (req: Request) => {
     if (Array.isArray(req.files)) {
       // Group files by fieldname when using .any()
       const grouped: Record<string, any> = {};
-      for (const file of req.files) {
-        const fieldName = file.fieldname;
+      for (const file of (req.files as any[])) {
+        const fieldName = (file as any).fieldname;
         if (!grouped[fieldName]) {
           grouped[fieldName] = [];
         }
@@ -131,13 +131,13 @@ const extractFilesInfo = (req: Request) => {
       // Convert single-item arrays to single objects for cleaner output
       const out: Record<string, any> = {};
       for (const [fieldName, files] of Object.entries(grouped)) {
-        out[fieldName] = files.length === 1 ? files[0] : files;
+        out[fieldName] = (files as any[]).length === 1 ? (files as any[])[0] : files;
       }
       return out;
     } else {
       // Handle object format (from .fields())
       const out: Record<string, any> = {};
-      for (const [key, value] of Object.entries(req.files)) {
+      for (const [key, value] of Object.entries(req.files as Record<string, any>)) {
         if (Array.isArray(value)) out[key] = value.map(formatFile);
         else out[key] = formatFile(value);
       }
@@ -145,6 +145,75 @@ const extractFilesInfo = (req: Request) => {
     }
   }
   return undefined;
+};
+
+// 🧭 Detect Stripe webhook requests
+const WEBHOOK_PATH = '/api/v1/payments/webhook';
+const isStripeWebhook = (req: Request): boolean => {
+  const pathMatch = req.originalUrl?.includes(WEBHOOK_PATH);
+  const sigPresent = Boolean(req.headers['stripe-signature']);
+  const ua = String(req.headers['user-agent'] || '');
+  const uaStripe = ua.startsWith('Stripe/');
+  return Boolean(pathMatch || sigPresent || uaStripe);
+};
+
+// 🧾 Build minimal webhook context for global logs (no secrets)
+const getWebhookLogContext = (req: Request) => {
+  const contentType = String(req.headers['content-type'] || '');
+  const ua = String(req.headers['user-agent'] || '');
+  const sigHeader = req.headers['stripe-signature'];
+  const body: any = (req as any).body;
+  const rawLength = Buffer.isBuffer(body)
+    ? body.length
+    : typeof body === 'string'
+      ? Buffer.byteLength(body)
+      : undefined;
+
+  return {
+    timestamp: new Date().toISOString(),
+    headers: {
+      'stripe-signature': sigHeader ? 'Present' : 'Missing',
+      'content-type': contentType,
+      'user-agent': ua,
+    },
+    bodySize: rawLength,
+  };
+};
+
+// 🧪 Safely parse Stripe event from raw body without mutating req.body
+const parseStripeEventSafe = (req: Request): any | undefined => {
+  const body: any = (req as any).body;
+  try {
+    if (Buffer.isBuffer(body)) return JSON.parse(body.toString('utf8'));
+    if (typeof body === 'string') return JSON.parse(body);
+    if (body && typeof body === 'object') return body;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const getEventSummary = (evt: any) => ({
+  type: evt?.type,
+  id: evt?.id,
+  created:
+    typeof evt?.created === 'number'
+      ? new Date(evt.created * 1000).toISOString()
+      : evt?.created,
+  livemode: Boolean(evt?.livemode),
+});
+
+const getPaymentIntentLogDetails = (evt: any) => {
+  const obj = evt?.data?.object || {};
+  const metadata = obj?.metadata && typeof obj.metadata === 'object' ? obj.metadata : undefined;
+  return {
+    paymentIntentId: obj?.id,
+    amount: obj?.amount,
+    amount_capturable: obj?.amount_capturable,
+    currency: obj?.currency,
+    status: obj?.status,
+    metadata,
+  };
 };
 
 // 🧾 Main Logger
@@ -213,6 +282,45 @@ export const requestLogger = (
     lines.push(colors.gray.bold(`[${formatDate()}]`));
     lines.push(`📥 Request: ${methodColor} ${routeColor} from IP:${ipColor}`);
 
+    // 🔔 Stripe webhook request context (global)
+    if (isStripeWebhook(req)) {
+      lines.push(colors.yellow('     🔔 Stripe webhook request context:'));
+      lines.push(colors.gray(indentBlock(JSON.stringify(getWebhookLogContext(req), null, 2))));
+
+      // ✅ Signature verification status from controller
+      const sigVerified = (res.locals as any)?.webhookSignatureVerified;
+      const sigError = (res.locals as any)?.webhookSignatureError;
+      if (sigVerified === true) {
+        lines.push(colors.green('     ✅ Webhook signature verified successfully'));
+      } else if (sigVerified === false) {
+        lines.push(colors.red(`     ❌ Webhook signature verification failed: ${sigError || 'unknown error'}`));
+      }
+
+      // 🔐 Masked webhook secret preview
+      const secretPreview = (res.locals as any)?.webhookSecretPreview || (process.env.STRIPE_WEBHOOK_SECRET ? String(process.env.STRIPE_WEBHOOK_SECRET).substring(0, 10) + '...' : undefined);
+      if (secretPreview) {
+        lines.push(colors.blue(`     🔐 Webhook secret configured: ${secretPreview}`));
+      }
+
+      const evt = parseStripeEventSafe(req);
+      if (evt && evt.object === 'event' && evt.type) {
+        lines.push(colors.yellow('     📨 Received webhook event:'));
+        lines.push(colors.gray(indentBlock(JSON.stringify(getEventSummary(evt), null, 2))));
+
+        const type = evt.type as string;
+        if (type === 'payment_intent.amount_capturable_updated') {
+          lines.push(colors.yellow('     💳 Amount capturable updated:'));
+          lines.push(colors.gray(indentBlock(JSON.stringify(getPaymentIntentLogDetails(evt), null, 2))));
+        } else if (type === 'payment_intent.succeeded') {
+          lines.push(colors.yellow('     💰 Processing payment succeeded:'));
+          lines.push(colors.gray(indentBlock(JSON.stringify(getPaymentIntentLogDetails(evt), null, 2))));
+        } else if (type === 'payment_intent.payment_failed') {
+          lines.push(colors.yellow('     ❌ Payment failed details:'));
+          lines.push(colors.gray(indentBlock(JSON.stringify(getPaymentIntentLogDetails(evt), null, 2))));
+        }
+      }
+    }
+
     if (config.node_env === 'development') {
       lines.push(colors.yellow('     🔎 Request details:'));
       lines.push(
@@ -248,3 +356,5 @@ export const requestLogger = (
 
   next();
 };
+
+// (removed) Misplaced Stripe signature log block — now handled inside formatted logger output

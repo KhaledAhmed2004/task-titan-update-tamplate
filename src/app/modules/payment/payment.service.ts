@@ -801,12 +801,12 @@ const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> 
       return;
     }
 
-    console.log(`Payment ${paymentIntent.id} is now capturable, capturing to hold funds on platform...`);
+    // console.log(`Payment ${paymentIntent.id} is now capturable, capturing to hold funds on platform...`);
 
     try {
       // Capture the payment on the platform account (no transfer_data configured)
       const capturedPayment = await stripe.paymentIntents.capture(paymentIntent.id);
-      console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
+      // console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
 
       // Mark local payment as HELD (captured and held in platform balance)
       await PaymentModel.updateMany(
@@ -840,7 +840,7 @@ const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> 
     const { BidService } = await import('../bid/bid.service');
     try {
       await BidService.completeBidAcceptance(bidId);
-      console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated).`);
+      // console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated).`);
     } catch (error) {
       console.error('Failed to complete bid acceptance after capture:', error);
     }

@@ -12,7 +12,6 @@ router.post(
   '/webhook',
   WebhookController.handleStripeWebhook
 );
-router.get('/webhook/health', WebhookController.webhookHealthCheck);
 
 // Stripe Connect account management
 router.post(

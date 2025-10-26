@@ -6,17 +6,17 @@ import { stripe } from '../../../config/stripe';
 class WebhookController {
   // Handle Stripe webhook events
   handleStripeWebhook = async (req: Request, res: Response) => {
-    // Enhanced logging for debugging
-    console.log('🔔 WEBHOOK RECEIVED:', {
-      timestamp: new Date().toISOString(),
-      headers: {
-        'stripe-signature': req.headers['stripe-signature'] ? 'Present' : 'Missing',
-        'content-type': req.headers['content-type'],
-        'user-agent': req.headers['user-agent'],
-      },
-      bodySize: req.body ? req.body.length : 0,
-      rawBody: req.body ? req.body.toString().substring(0, 200) + '...' : 'No body'
-    });
+    // // Enhanced logging for debugging
+    // console.log('🔔 WEBHOOK RECEIVED:', {
+    //   timestamp: new Date().toISOString(),
+    //   headers: {
+    //     'stripe-signature': req.headers['stripe-signature'] ? 'Present' : 'Missing',
+    //     'content-type': req.headers['content-type'],
+    //     'user-agent': req.headers['user-agent'],
+    //   },
+    //   bodySize: req.body ? req.body.length : 0,
+    //   rawBody: req.body ? req.body.toString().substring(0, 200) + '...' : 'No body'
+    // });
 
     const sig = req.headers['stripe-signature'] as string;
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -28,31 +28,38 @@ class WebhookController {
       });
     }
 
-    console.log('🔐 Webhook secret configured:', endpointSecret.substring(0, 10) + '...');
+    (res.locals as any).webhookSecretPreview =
+      endpointSecret.substring(0, 10) + '...';
 
     let event;
 
     try {
       // Verify webhook signature
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-      console.log('✅ Webhook signature verified successfully');
+      // console.log('✅ Webhook signature verified successfully');
+      // Expose to global logger
+      (res.locals as any).webhookSignatureVerified = true;
     } catch (err: any) {
       console.error('❌ Webhook signature verification failed:', {
         error: err.message,
         signature: sig ? sig.substring(0, 20) + '...' : 'No signature',
-        bodyLength: req.body ? req.body.length : 0
+        bodyLength: req.body ? req.body.length : 0,
       });
+      // Expose failure reason to global logger
+      (res.locals as any).webhookSignatureVerified = false;
+      (res.locals as any).webhookSignatureError =
+        err?.message || 'unknown error';
       return res.status(httpStatus.BAD_REQUEST).json({
         error: `Webhook Error: ${err.message}`,
       });
     }
 
-    console.log('📨 Received webhook event:', {
-      type: event.type,
-      id: event.id,
-      created: new Date(event.created * 1000).toISOString(),
-      livemode: event.livemode
-    });
+    // console.log('📨 Received webhook event:', {
+    //   type: event.type,
+    //   id: event.id,
+    //   created: new Date(event.created * 1000).toISOString(),
+    //   livemode: event.livemode,
+    // });
 
     try {
       // Handle the event
@@ -114,17 +121,20 @@ class WebhookController {
   // Handle successful payment
   private async handlePaymentSucceeded(paymentIntent: any): Promise<void> {
     try {
-      console.log('💰 Processing payment succeeded:', {
-        paymentIntentId: paymentIntent.id,
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-        status: paymentIntent.status,
-        metadata: paymentIntent.metadata
-      });
+      // console.log('💰 Processing payment succeeded:', {
+      //   paymentIntentId: paymentIntent.id,
+      //   amount: paymentIntent.amount,
+      //   currency: paymentIntent.currency,
+      //   status: paymentIntent.status,
+      //   metadata: paymentIntent.metadata,
+      // });
 
       const bidId = paymentIntent.metadata?.bid_id;
       if (!bidId) {
-        console.error('❌ No bid_id found in payment intent metadata:', paymentIntent.metadata);
+        console.error(
+          '❌ No bid_id found in payment intent metadata:',
+          paymentIntent.metadata
+        );
         return;
       }
 
@@ -136,7 +146,10 @@ class WebhookController {
         data: { object: paymentIntent },
       });
 
-      console.log('✅ Successfully processed payment_intent.succeeded for bid:', bidId);
+      console.log(
+        '✅ Successfully processed payment_intent.succeeded for bid:',
+        bidId
+      );
     } catch (error) {
       console.error('❌ Error handling payment succeeded:', error);
       throw error;
@@ -196,23 +209,28 @@ class WebhookController {
   }
 
   // Handle amount capturable updated (manual capture flow)
-  private async handleAmountCapturableUpdated(paymentIntent: any): Promise<void> {
+  private async handleAmountCapturableUpdated(
+    paymentIntent: any
+  ): Promise<void> {
     try {
-      console.log('💳 Amount capturable updated:', {
-        paymentIntentId: paymentIntent.id,
-        amount_capturable: paymentIntent.amount_capturable,
-        currency: paymentIntent.currency,
-        status: paymentIntent.status,
-        metadata: paymentIntent.metadata
-      });
+      // console.log('💳 Amount capturable updated:', {
+      //   paymentIntentId: paymentIntent.id,
+      //   amount_capturable: paymentIntent.amount_capturable,
+      //   currency: paymentIntent.currency,
+      //   status: paymentIntent.status,
+      //   metadata: paymentIntent.metadata,
+      // });
 
       const bidId = paymentIntent.metadata?.bid_id;
       if (!bidId) {
-        console.error('❌ No bid_id found in payment intent metadata:', paymentIntent.metadata);
+        console.error(
+          '❌ No bid_id found in payment intent metadata:',
+          paymentIntent.metadata
+        );
         return;
       }
 
-      console.log('🎯 Triggering capture for bid:', bidId);
+      // console.log('🎯 Triggering capture for bid:', bidId);
 
       // Delegate to service to perform capture + updates
       await PaymentService.handleWebhookEvent({
@@ -220,7 +238,10 @@ class WebhookController {
         data: { object: paymentIntent },
       });
 
-      console.log('✅ Successfully processed amount_capturable_updated for bid:', bidId);
+      // console.log(
+      //   '✅ Successfully processed amount_capturable_updated for bid:',
+      //   bidId
+      // );
     } catch (error) {
       console.error('❌ Error handling amount capturable updated:', error);
       throw error;
