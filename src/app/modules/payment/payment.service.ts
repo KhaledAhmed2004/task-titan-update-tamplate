@@ -26,6 +26,7 @@ import {
   calculatePlatformFee,
   calculateFreelancerAmount,
   handleStripeError,
+  DEFAULT_CURRENCY,
 } from '../../../config/stripe';
 
 // Create Stripe Connect account for freelancers
@@ -217,45 +218,95 @@ export const checkOnboardingStatus = async (
 };
 
 // Create escrow payment when bid is accepted
+// Escrow helpers (internal)
+const getBidAndTask = async (bidId: any) => {
+  const bid = await BidModel.findById(bidId).populate('taskId');
+  if (!bid) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Bid not found');
+  }
+  const task = bid.taskId as any;
+  if (!bid.taskerId) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Bid does not have an assigned freelancer'
+    );
+  }
+  return { bid, task };
+};
+
+const ensureFreelancerOnboarded = async (taskerId: any) => {
+  const freelancerStripeAccount =
+    await StripeAccountModel.isExistAccountByUserId(taskerId);
+  if (
+    !freelancerStripeAccount ||
+    !freelancerStripeAccount.onboardingCompleted
+  ) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Freelancer has not completed Stripe onboarding'
+    );
+  }
+  return freelancerStripeAccount;
+};
+
+const ensureNoExistingPaymentForBid = async (bidId: any) => {
+  const existingPayment = await PaymentModel.getPaymentsByBid(bidId);
+  if (existingPayment && existingPayment.length > 0) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Payment already exists for this bid'
+    );
+  }
+};
+
+const buildIntentMetadata = (data: IEscrowPayment, task: any) => ({
+  bid_id: data.bidId!.toString(),
+  poster_id: data.posterId!.toString(),
+  freelancer_id: data.freelancerId!.toString(),
+  task_title: task?.title,
+  type: 'escrow_payment',
+});
+
+const createEscrowIntent = async (
+  amount: number,
+  metadata: Record<string, any>
+) => {
+  return stripe.paymentIntents.create({
+    amount: dollarsToCents(amount),
+    currency: DEFAULT_CURRENCY,
+    automatic_payment_methods: { enabled: true },
+    capture_method: 'manual',
+    metadata,
+  });
+};
+
+const createPaymentRecord = async (
+  data: IEscrowPayment,
+  platformFee: number,
+  freelancerAmount: number,
+  paymentIntentId: string
+): Promise<IPayment> => {
+  const payment = new PaymentModel({
+    taskId: data.taskId,
+    bidId: data.bidId,
+    posterId: data.posterId,
+    freelancerId: data.freelancerId,
+    amount: data.amount,
+    platformFee,
+    freelancerAmount,
+    stripePaymentIntentId: paymentIntentId,
+    status: PAYMENT_STATUS.PENDING,
+    currency: DEFAULT_CURRENCY,
+    metadata: data.metadata,
+  });
+  await payment.save();
+  return payment as IPayment;
+};
 export const createEscrowPayment = async (
   data: IEscrowPayment
 ): Promise<{ payment: IPayment; client_secret: string }> => {
   try {
-    // Validate bid exists and get details
-    const bid = await BidModel.findById(data.bidId).populate('taskId');
-
-    if (!bid) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'Bid not found');
-    }
-
-    const task = bid.taskId as any;
-    // if (task.userId !== data.posterId) {
-    //   throw new ApiError(
-    //     httpStatus.FORBIDDEN,
-    //     'You are not authorized to accept this bid'
-    //   );
-    // }
-
-    // Check freelancer's Stripe account
-    if (!bid.taskerId) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Bid does not have an assigned freelancer'
-      );
-    }
-    const freelancerStripeAccount =
-      await StripeAccountModel.isExistAccountByUserId(bid.taskerId);
-    if (
-      !freelancerStripeAccount ||
-      !freelancerStripeAccount.onboardingCompleted
-    ) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Freelancer has not completed Stripe onboarding'
-      );
-    }
-
-    // Check if payment already exists for this bid
+    // Validate required fields early
     if (!data.bidId) {
       throw new ApiError(
         httpStatus.BAD_REQUEST,
@@ -269,53 +320,25 @@ export const createEscrowPayment = async (
       );
     }
 
-    const existingPayment = await PaymentModel.getPaymentsByBid(data.bidId);
-
-    if (existingPayment && existingPayment.length > 0) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Payment already exists for this bid'
-      );
-    }
+    const { bid, task } = await getBidAndTask(data.bidId);
+    await ensureFreelancerOnboarded(bid.taskerId);
+    await ensureNoExistingPaymentForBid(data.bidId);
 
     const platformFee = calculatePlatformFee(data.amount);
     const freelancerAmount = calculateFreelancerAmount(data.amount);
 
-    // Separate charges and transfers model:
-    // Charge on the platform account; transfer to freelancer on task completion.
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: dollarsToCents(data.amount),
-      currency: 'usd',
-      automatic_payment_methods: { enabled: true },
-      capture_method: 'manual', // authorize now; we'll capture at acceptance webhook
-      metadata: {
-        bid_id: data.bidId.toString(),
-        poster_id: data.posterId.toString(),
-        freelancer_id: data.freelancerId.toString(),
-        task_title: task.title,
-        type: 'escrow_payment',
-      },
-    });
+    const metadata = buildIntentMetadata(data, task);
+    const paymentIntent = await createEscrowIntent(data.amount, metadata);
 
-    // Create payment record in database
-    const payment = new PaymentModel({
-      taskId: data.taskId,
-      bidId: data.bidId,
-      // posterId: data.clientId,
-      posterId: data.posterId,
-      freelancerId: data.freelancerId,
-      amount: data.amount,
-      platformFee: platformFee,
-      freelancerAmount: freelancerAmount,
-      stripePaymentIntentId: paymentIntent.id,
-      status: PAYMENT_STATUS.PENDING,
-      currency: 'usd',
-      metadata: data.metadata,
-    });
-    await payment.save();
+    const payment = await createPaymentRecord(
+      data,
+      platformFee,
+      freelancerAmount,
+      paymentIntent.id
+    );
 
     return {
-      payment: payment as IPayment,
+      payment,
       client_secret: paymentIntent.client_secret!,
     };
   } catch (error) {
@@ -328,6 +351,98 @@ export const createEscrowPayment = async (
 };
 
 // Release payment when task is completed and approved
+// Release helpers (internal)
+const getPaymentOrThrow = async (paymentId: any) => {
+  const payment = await PaymentModel.isExistPaymentById(paymentId.toString());
+  if (!payment) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Payment not found');
+  }
+  return payment;
+};
+
+const ensureHeldStatus = (payment: any) => {
+  if (payment.status !== PAYMENT_STATUS.HELD) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Payment is not in held status. Current status: ${payment.status}`
+    );
+  }
+};
+
+const ensureClientAuthorized = async (taskId: any, clientId: any) => {
+  const task = await TaskModel.findById(taskId);
+  if (!task || task.userId.toString() !== clientId?.toString()) {
+    throw new ApiError(
+      httpStatus.FORBIDDEN,
+      'You are not authorized to release this payment'
+    );
+  }
+};
+
+const getChargeIdForIntent = async (
+  intentId: string
+): Promise<{ chargeId?: string; canTransferWithoutSource: boolean }> => {
+  const paymentIntent = await stripe.paymentIntents.retrieve(intentId, {
+    expand: ['latest_charge'],
+  });
+
+  let chargeId: string | undefined;
+  const latestCharge: any = (paymentIntent as any).latest_charge;
+  if (typeof latestCharge === 'string') {
+    chargeId = latestCharge;
+  } else if (latestCharge && latestCharge.id) {
+    chargeId = latestCharge.id;
+  }
+
+  if (!chargeId) {
+    const chargeList = await stripe.charges.list({
+      payment_intent: intentId,
+      limit: 1,
+    });
+    if (chargeList.data && chargeList.data.length > 0) {
+      chargeId = chargeList.data[0].id;
+    }
+  }
+
+  return { chargeId, canTransferWithoutSource: !chargeId };
+};
+
+const getFreelancerAccountOrThrow = async (userId: any) => {
+  const freelancerStripeAccount =
+    await StripeAccountModel.isExistAccountByUserId(userId);
+  if (!freelancerStripeAccount?.stripeAccountId) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Freelancer Stripe account not found'
+    );
+  }
+  return freelancerStripeAccount;
+};
+
+const createTransferToFreelancer = async (
+  amount: number,
+  currency: string,
+  destination: string,
+  sourceChargeId?: string,
+  metadata?: Record<string, any>
+) => {
+  const canTransferWithoutSource = !sourceChargeId;
+  return stripe.transfers.create({
+    amount: dollarsToCents(amount),
+    currency,
+    destination,
+    ...(canTransferWithoutSource ? {} : { source_transaction: sourceChargeId }),
+    metadata,
+  });
+};
+
+const markPaymentReleasedAndBidCompleted = async (
+  paymentId: any,
+  bidId: any
+) => {
+  await PaymentModel.updatePaymentStatus(paymentId, PAYMENT_STATUS.RELEASED);
+  await BidModel.findByIdAndUpdate(bidId, { status: 'completed' });
+};
 export const releaseEscrowPayment = async (
   data: IPaymentRelease
 ): Promise<{
@@ -337,95 +452,34 @@ export const releaseEscrowPayment = async (
   platform_fee: number;
 }> => {
   try {
-    const payment = await PaymentModel.isExistPaymentById(
-      data.paymentId.toString()
+    const payment = await getPaymentOrThrow(data.paymentId);
+
+    ensureHeldStatus(payment);
+
+    await ensureClientAuthorized(payment.taskId, data.clientId);
+
+    const { chargeId } = await getChargeIdForIntent(
+      payment.stripePaymentIntentId
     );
 
-    if (!payment) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'Payment not found');
-    }
-
-    // Capture-at-acceptance model: allow release only when captured/held.
-    if (payment.status !== PAYMENT_STATUS.HELD) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        `Payment is not in held status. Current status: ${payment.status}`
-      );
-    }
-
-    // Verify authorization - check if the client is the poster of the task
-    const task = await TaskModel.findById(payment.taskId);
-    if (!task || task.userId.toString() !== data.clientId?.toString()) {
-      throw new ApiError(
-        httpStatus.FORBIDDEN,
-        'You are not authorized to release this payment'
-      );
-    }
-
-    // Retrieve PaymentIntent and locate its associated charge robustly
-    const paymentIntent = await stripe.paymentIntents.retrieve(
-      payment.stripePaymentIntentId,
-      { expand: ['latest_charge'] }
-    );
-
-    // Try latest_charge first
-    let chargeId: string | undefined;
-    const latestCharge: any = (paymentIntent as any).latest_charge;
-    if (typeof latestCharge === 'string') {
-      chargeId = latestCharge;
-    } else if (latestCharge && latestCharge.id) {
-      chargeId = latestCharge.id;
-    }
-
-    // Fallback: list charges by payment_intent
-    if (!chargeId) {
-      const chargeList = await stripe.charges.list({
-        payment_intent: payment.stripePaymentIntentId,
-        limit: 1,
-      });
-      if (chargeList.data && chargeList.data.length > 0) {
-        chargeId = chargeList.data[0].id;
-      }
-    }
-
-    // Final fallback: allow transfer without source_transaction
-    const canTransferWithoutSource = !chargeId;
-
-    // Get freelancer Stripe account
-    const freelancerStripeAccount = await StripeAccountModel.isExistAccountByUserId(
+    const freelancerStripeAccount = await getFreelancerAccountOrThrow(
       payment.freelancerId
     );
-    if (!freelancerStripeAccount?.stripeAccountId) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Freelancer Stripe account not found'
-      );
-    }
 
-    // Create transfer to freelancer for freelancerAmount (platform keeps fee)
-    await stripe.transfers.create({
-      amount: dollarsToCents(payment.freelancerAmount),
-      currency: payment.currency || 'usd',
-      destination: freelancerStripeAccount.stripeAccountId,
-      ...(canTransferWithoutSource ? {} : { source_transaction: chargeId }),
-      metadata: {
+    await createTransferToFreelancer(
+      payment.freelancerAmount,
+      payment.currency || DEFAULT_CURRENCY,
+      freelancerStripeAccount.stripeAccountId,
+      chargeId,
+      {
         bid_id: payment.bidId?.toString?.() || String(payment.bidId),
         payment_id: payment._id?.toString?.() || String(payment._id),
         intent_id: payment.stripePaymentIntentId,
         type: 'escrow_release_transfer',
-      },
-    });
-
-    // Update payment status
-    await PaymentModel.updatePaymentStatus(
-      data.paymentId,
-      PAYMENT_STATUS.RELEASED
+      }
     );
 
-    // Update bid status to completed
-    await BidModel.findByIdAndUpdate(payment.bidId, {
-      status: 'completed',
-    });
+    await markPaymentReleasedAndBidCompleted(data.paymentId, payment.bidId);
 
     return {
       success: true,
@@ -443,6 +497,43 @@ export const releaseEscrowPayment = async (
 };
 
 // Refund escrow payment
+// Refund helpers (internal)
+const ensureRefundable = (payment: any) => {
+  if (payment.status === PAYMENT_STATUS.REFUNDED) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Payment has already been refunded'
+    );
+  }
+  if (payment.status === PAYMENT_STATUS.RELEASED) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Cannot refund a payment that has already been released'
+    );
+  }
+};
+
+const createRefundForIntent = async (intentId: string, reason?: string) => {
+  return stripe.refunds.create({
+    payment_intent: intentId,
+    reason: 'requested_by_customer',
+    metadata: {
+      refund_reason: reason || 'No reason provided',
+    },
+  });
+};
+
+const markPaymentRefunded = async (paymentId: any, reason?: string) => {
+  await PaymentModel.updatePaymentStatus(
+    new mongoose.Types.ObjectId(paymentId),
+    PAYMENT_STATUS.REFUNDED
+  );
+  if (reason) {
+    await PaymentModel.findByIdAndUpdate(paymentId, {
+      refundReason: reason,
+    });
+  }
+};
 export const refundEscrowPayment = async (
   paymentId: string,
   reason?: string
@@ -454,53 +545,24 @@ export const refundEscrowPayment = async (
       throw new ApiError(httpStatus.NOT_FOUND, 'Payment not found');
     }
 
-    if (payment.status === PAYMENT_STATUS.REFUNDED) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Payment has already been refunded'
-      );
-    }
+    ensureRefundable(payment);
 
-    if (payment.status === PAYMENT_STATUS.RELEASED) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Cannot refund a payment that has already been released'
-      );
-    }
-
-    // Create refund in Stripe
-    const refund = await stripe.refunds.create({
-      payment_intent: payment.stripePaymentIntentId,
-      reason: 'requested_by_customer',
-      metadata: {
-        payment_id: paymentId,
-        refund_reason: reason || 'No reason provided',
-      },
-    });
-
-    // Update payment status
-    await PaymentModel.updatePaymentStatus(
-      new mongoose.Types.ObjectId(paymentId),
-      PAYMENT_STATUS.REFUNDED
+    const refund = await createRefundForIntent(
+      payment.stripePaymentIntentId,
+      reason
     );
 
-    // Update refund reason if provided
-    if (reason) {
-      await PaymentModel.findByIdAndUpdate(paymentId, {
-        refundReason: reason,
-      });
-    }
+    await markPaymentRefunded(paymentId, reason);
 
-    // Update bid status
     await BidModel.findByIdAndUpdate(payment.bidId, {
       status: 'cancelled',
     });
 
     return {
       success: true,
-      refund_id: refund.id,
-      amount_refunded: refund.amount / 100, // Convert cents to dollars
       message: 'Payment refunded successfully',
+      refund_id: refund.id,
+      amount_refunded: refund.amount / 100,
     };
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -726,9 +788,14 @@ const handlePaymentSucceeded = async (paymentIntent: any): Promise<void> => {
       }
     );
     // Do not re-trigger bid acceptance here; amount_capturable_updated handles capture + acceptance
-    console.log(`Payment ${paymentIntent.id} succeeded; status set to HELD. No duplicate acceptance triggered.`);
+    console.log(
+      `Payment ${paymentIntent.id} succeeded; status set to HELD. No duplicate acceptance triggered.`
+    );
   } catch (error) {
-    console.error(`Error in handlePaymentSucceeded for payment ${paymentIntent.id}:`, error);
+    console.error(
+      `Error in handlePaymentSucceeded for payment ${paymentIntent.id}:`,
+      error
+    );
   }
 };
 
@@ -760,7 +827,8 @@ const handlePaymentFailed = async (paymentIntent: any): Promise<void> => {
       const task = await TaskModel.findById(bid.taskId);
       if (task) {
         // Only revert if the task is currently assigned to this tasker
-        const assignedMatches = task.assignedTo?.toString() === bid.taskerId?.toString();
+        const assignedMatches =
+          task.assignedTo?.toString() === bid.taskerId?.toString();
         if (assignedMatches) {
           await TaskModel.findByIdAndUpdate(task._id, {
             status: TaskStatus.OPEN,
@@ -771,7 +839,10 @@ const handlePaymentFailed = async (paymentIntent: any): Promise<void> => {
       }
     }
   } catch (revertErr) {
-    console.error('Failed to revert task state after payment failure:', revertErr);
+    console.error(
+      'Failed to revert task state after payment failure:',
+      revertErr
+    );
   }
 };
 
@@ -792,12 +863,17 @@ const handleAccountUpdated = async (account: any): Promise<void> => {
 };
 
 // Handle amount capturable updated webhook (manual capture flow)
-const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> => {
+const handleAmountCapturableUpdated = async (
+  paymentIntent: any
+): Promise<void> => {
   const bidId = paymentIntent.metadata?.bid_id;
 
   try {
     if (!bidId) {
-      console.error('❌ No bid_id in payment intent metadata for amount_capturable_updated:', paymentIntent.metadata);
+      console.error(
+        '❌ No bid_id in payment intent metadata for amount_capturable_updated:',
+        paymentIntent.metadata
+      );
       return;
     }
 
@@ -805,7 +881,9 @@ const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> 
 
     try {
       // Capture the payment on the platform account (no transfer_data configured)
-      const capturedPayment = await stripe.paymentIntents.capture(paymentIntent.id);
+      const capturedPayment = await stripe.paymentIntents.capture(
+        paymentIntent.id
+      );
       // console.log(`Payment ${paymentIntent.id} captured successfully (amount_capturable_updated handler)`);
 
       // Mark local payment as HELD (captured and held in platform balance)
@@ -819,8 +897,14 @@ const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> 
         }
       );
     } catch (captureError: any) {
-      console.error(`Failed to capture payment ${paymentIntent.id} in amount_capturable_updated handler:`, captureError);
-      if (captureError.message && captureError.message.includes('already been captured')) {
+      console.error(
+        `Failed to capture payment ${paymentIntent.id} in amount_capturable_updated handler:`,
+        captureError
+      );
+      if (
+        captureError.message &&
+        captureError.message.includes('already been captured')
+      ) {
         console.log(`Payment ${paymentIntent.id} was already captured`);
         await PaymentModel.updateMany(
           {
@@ -845,7 +929,10 @@ const handleAmountCapturableUpdated = async (paymentIntent: any): Promise<void> 
       console.error('Failed to complete bid acceptance after capture:', error);
     }
   } catch (error) {
-    console.error(`Error in handleAmountCapturableUpdated for payment ${paymentIntent.id}:`, error);
+    console.error(
+      `Error in handleAmountCapturableUpdated for payment ${paymentIntent.id}:`,
+      error
+    );
   }
 };
 
@@ -949,9 +1036,11 @@ const getPaymentHistory = async (
       await queryBuilder.getFilteredResults();
 
     // Format data
-    const formattedPayments = payments.map((payment) => ({
+    const formattedPayments = payments.map(payment => ({
       paymentId: payment.stripePaymentIntentId,
-      taskerName: payment.freelancerId ? (payment.freelancerId as any).name : 'N/A',
+      taskerName: payment.freelancerId
+        ? (payment.freelancerId as any).name
+        : 'N/A',
       amount: payment.amount,
       transactionDate: payment.createdAt,
       paymentStatus: payment.status,
@@ -990,15 +1079,13 @@ export const getCurrentIntentByBid = async (
   );
 
   if (!payments || payments.length === 0) {
-    throw new ApiError(
-      httpStatus.NOT_FOUND,
-      'No payment found for this bid'
-    );
+    throw new ApiError(httpStatus.NOT_FOUND, 'No payment found for this bid');
   }
 
   // Prefer pending payment; otherwise take the most recent
   const payment =
-    payments.find((p: any) => p.status === PAYMENT_STATUS.PENDING) || payments[0];
+    payments.find((p: any) => p.status === PAYMENT_STATUS.PENDING) ||
+    payments[0];
 
   if (!payment.stripePaymentIntentId) {
     throw new ApiError(

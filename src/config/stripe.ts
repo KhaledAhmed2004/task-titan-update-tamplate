@@ -10,6 +10,9 @@ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 export const PLATFORM_FEE_PERCENTAGE =
   Number(process.env.PLATFORM_FEE_PERCENTAGE) || 20;
 
+// Default currency for payments
+export const DEFAULT_CURRENCY = 'usd';
+
 // Utility functions for payment calculations
 export const dollarsToCents = (dollars: number): number => {
   return Math.round(dollars * 100);
