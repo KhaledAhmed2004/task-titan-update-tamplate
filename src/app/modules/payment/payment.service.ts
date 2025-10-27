@@ -1,221 +1,51 @@
 import {
-  IStripeAccount,
   IEscrowPayment,
   IPaymentRelease,
   IPayment,
   IPaymentFilters,
-  IPaymentStats,
   PAYMENT_STATUS,
+  IPaymentView,
+  IPaymentStats,
 } from './payment.interface';
 import mongoose from 'mongoose';
-import {
-  Payment,
-  Payment as PaymentModel,
-  StripeAccount as StripeAccountModel,
-} from './payment.model';
-import { User } from '../user/user.model';
+import { Payment, Payment as PaymentModel } from './payment.model';
 import { TaskModel } from '../task/task.model';
 import { TaskStatus } from '../task/task.interface';
 import { BidModel } from '../bid/bid.model';
 import ApiError from '../../../errors/ApiError';
 import httpStatus from 'http-status';
 import QueryBuilder from '../../builder/QueryBuilder';
+import AggregationBuilder from '../../builder/AggregationBuilder';
 import {
   stripe,
-  dollarsToCents,
   calculatePlatformFee,
   calculateFreelancerAmount,
   handleStripeError,
   DEFAULT_CURRENCY,
 } from '../../../config/stripe';
+import {
+  createPaymentIntent as stripeCreatePaymentIntent,
+  createTransfer as stripeCreateTransfer,
+  createRefundForIntent as stripeCreateRefundForIntent,
+} from './stripe.adapter';
+import StripeConnectService from './stripeConnect.service';
 
-// Create Stripe Connect account for freelancers
-export const createStripeAccount = async (
-  data: IStripeAccount
-): Promise<any> => {
-  try {
-    // Get user details
-    const user = await User.findById(data.userId).select(
-      'name email phone dateOfBirth location'
-    );
-
-    if (!user) {
-      throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
-    }
-
-    // Check if user already has a Stripe account
-    const existingAccount = await StripeAccountModel.isExistAccountByUserId(
-      data.userId
-    );
-    if (existingAccount) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'User already has a Stripe account'
-      );
-    }
-
-    // Prepare DOB if exists
-    let dob;
-    if (user.dateOfBirth) {
-      const parts = user.dateOfBirth.split('-'); // format: YYYY-MM-DD
-      dob = {
-        year: Number(parts[0]),
-        month: Number(parts[1]),
-        day: Number(parts[2]),
-      };
-    }
-
-    // // Format phone number if exists
-    // let formattedPhone = user.phone;
-    // if (formattedPhone) {
-    //   const phoneNumber = parsePhoneNumberFromString(formattedPhone, 'US');
-    //   if (phoneNumber && phoneNumber.isValid()) {
-    //     formattedPhone = phoneNumber.formatInternational();
-    //   } else {
-    //     throw new Error('Invalid phone number format');
-    //   }
-    // }
-    // Create Stripe Express account
-    const account = await stripe.accounts.create({
-      type: 'express',
-      country: 'US',
-      email: user.email,
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
-      },
-      business_type: 'individual',
-      individual: {
-        first_name: user.name.split(' ')[0],
-        last_name: user.name.split(' ')[1] || '',
-        email: user.email,
-        // phone: user.phone || undefined,
-        dob,
-        address: {
-          city: user.location || undefined,
-          country: 'US',
-        },
-      },
-      metadata: {
-        user_id: data.userId.toString(),
-        account_type: data.accountType,
-      },
-    });
-
-    // Save account details to database
-    const stripeAccount = new StripeAccountModel({
-      userId: data.userId,
-      stripeAccountId: account.id,
-      onboardingCompleted: false,
-      chargesEnabled: account.charges_enabled,
-      payoutsEnabled: account.payouts_enabled,
-      country: account.country,
-      currency: account.default_currency || 'usd',
-      businessType: account.business_type || 'individual',
-    });
-    await stripeAccount.save();
-
-    return {
-      account_id: account.id,
-      onboarding_required: !account.charges_enabled,
-      database_record: stripeAccount,
-    };
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Failed to create Stripe account: ${handleStripeError(error)}`
-    );
-  }
+// Helper to present sender/receiver aliases for readability
+const mapPaymentToView = (payment: any): IPaymentView => {
+  const base =
+    typeof payment?.toObject === 'function' ? payment.toObject() : payment;
+  return {
+    ...base,
+    senderId: base.posterId,
+    receiverId: base.freelancerId,
+  };
 };
 
-// Create onboarding link for freelancer
-export const createOnboardingLink = async (userId: string): Promise<string> => {
-  try {
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    const stripeAccount = await StripeAccountModel.isExistAccountByUserId(
-      userObjectId
-    );
+// Moved to stripeConnected.service.ts
 
-    if (!stripeAccount) {
-      throw new ApiError(
-        httpStatus.NOT_FOUND,
-        'Stripe account not found. Please create an account first.'
-      );
-    }
+// Moved to stripeConnected.service.ts
 
-    if (stripeAccount.onboardingCompleted) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'User has already completed onboarding'
-      );
-    }
-
-    const accountLink = await stripe.accountLinks.create({
-      account: stripeAccount.stripeAccountId,
-      refresh_url: `${process.env.FRONTEND_URL}/onboarding/refresh`,
-      return_url: `${process.env.FRONTEND_URL}/onboarding/complete`,
-      type: 'account_onboarding',
-    });
-
-    return accountLink.url;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Failed to create onboarding link: ${handleStripeError(error)}`
-    );
-  }
-};
-
-// Check if freelancer has completed Stripe onboarding
-export const checkOnboardingStatus = async (
-  userId: string
-): Promise<{
-  completed: boolean;
-  account_id?: string;
-  missing_fields?: string[];
-}> => {
-  try {
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    const stripeAccount = await StripeAccountModel.isExistAccountByUserId(
-      userObjectId
-    );
-
-    if (!stripeAccount) {
-      return { completed: false };
-    }
-
-    // Check with Stripe for latest status
-    const account = await stripe.accounts.retrieve(
-      stripeAccount.stripeAccountId
-    );
-    console.log(account);
-    const completed = account.charges_enabled && account.payouts_enabled;
-    const currentlyDue = account?.requirements?.currently_due; // Array of missing fields
-
-    // Update local status if changed
-    if (completed !== stripeAccount.onboardingCompleted) {
-      await StripeAccountModel.updateAccountStatus(stripeAccount.userId, {
-        onboardingCompleted: completed,
-        chargesEnabled: account.charges_enabled,
-        payoutsEnabled: account.payouts_enabled,
-      });
-    }
-
-    return {
-      completed,
-      account_id: stripeAccount.stripeAccountId,
-      // missing_fields: currentlyDue,
-      missing_fields: currentlyDue ?? undefined,
-    };
-  } catch (error) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Failed to check onboarding status: ${handleStripeError(error)}`
-    );
-  }
-};
+// Moved to stripeConnected.service.ts
 
 // Create escrow payment when bid is accepted
 // Escrow helpers (internal)
@@ -234,20 +64,7 @@ const getBidAndTask = async (bidId: any) => {
   return { bid, task };
 };
 
-const ensureFreelancerOnboarded = async (taskerId: any) => {
-  const freelancerStripeAccount =
-    await StripeAccountModel.isExistAccountByUserId(taskerId);
-  if (
-    !freelancerStripeAccount ||
-    !freelancerStripeAccount.onboardingCompleted
-  ) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'Freelancer has not completed Stripe onboarding'
-    );
-  }
-  return freelancerStripeAccount;
-};
+// Moved to stripeConnected.service.ts
 
 const ensureNoExistingPaymentForBid = async (bidId: any) => {
   const existingPayment = await PaymentModel.getPaymentsByBid(bidId);
@@ -271,11 +88,10 @@ const createEscrowIntent = async (
   amount: number,
   metadata: Record<string, any>
 ) => {
-  return stripe.paymentIntents.create({
-    amount: dollarsToCents(amount),
+  return stripeCreatePaymentIntent({
+    amountDollars: amount,
     currency: DEFAULT_CURRENCY,
-    automatic_payment_methods: { enabled: true },
-    capture_method: 'manual',
+    captureMethod: 'manual',
     metadata,
   });
 };
@@ -321,7 +137,7 @@ export const createEscrowPayment = async (
     }
 
     const { bid, task } = await getBidAndTask(data.bidId);
-    await ensureFreelancerOnboarded(bid.taskerId);
+    await StripeConnectService.ensureFreelancerOnboarded(bid.taskerId);
     await ensureNoExistingPaymentForBid(data.bidId);
 
     const platformFee = calculatePlatformFee(data.amount);
@@ -407,17 +223,7 @@ const getChargeIdForIntent = async (
   return { chargeId, canTransferWithoutSource: !chargeId };
 };
 
-const getFreelancerAccountOrThrow = async (userId: any) => {
-  const freelancerStripeAccount =
-    await StripeAccountModel.isExistAccountByUserId(userId);
-  if (!freelancerStripeAccount?.stripeAccountId) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'Freelancer Stripe account not found'
-    );
-  }
-  return freelancerStripeAccount;
-};
+// Moved to stripeConnected.service.ts
 
 const createTransferToFreelancer = async (
   amount: number,
@@ -426,12 +232,11 @@ const createTransferToFreelancer = async (
   sourceChargeId?: string,
   metadata?: Record<string, any>
 ) => {
-  const canTransferWithoutSource = !sourceChargeId;
-  return stripe.transfers.create({
-    amount: dollarsToCents(amount),
+  return stripeCreateTransfer({
+    amountDollars: amount,
     currency,
-    destination,
-    ...(canTransferWithoutSource ? {} : { source_transaction: sourceChargeId }),
+    destinationAccountId: destination,
+    sourceChargeId,
     metadata,
   });
 };
@@ -462,7 +267,7 @@ export const releaseEscrowPayment = async (
       payment.stripePaymentIntentId
     );
 
-    const freelancerStripeAccount = await getFreelancerAccountOrThrow(
+    const freelancerStripeAccount = await StripeConnectService.getFreelancerAccountOrThrow(
       payment.freelancerId
     );
 
@@ -514,13 +319,7 @@ const ensureRefundable = (payment: any) => {
 };
 
 const createRefundForIntent = async (intentId: string, reason?: string) => {
-  return stripe.refunds.create({
-    payment_intent: intentId,
-    reason: 'requested_by_customer',
-    metadata: {
-      refund_reason: reason || 'No reason provided',
-    },
-  });
+  return stripeCreateRefundForIntent(intentId, reason);
 };
 
 const markPaymentRefunded = async (paymentId: any, reason?: string) => {
@@ -576,11 +375,11 @@ export const refundEscrowPayment = async (
 // Get payment by ID
 export const getPaymentById = async (
   paymentId: string
-): Promise<IPayment | null> => {
+): Promise<IPaymentView | null> => {
   try {
     const payment = await PaymentModel.isExistPaymentById(paymentId);
 
-    return payment as IPayment;
+    return payment ? mapPaymentToView(payment) : null;
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';
@@ -597,54 +396,69 @@ export const getPayments = async (
   page: number = 1,
   limit: number = 10
 ): Promise<{
-  payments: IPayment[];
+  payments: IPaymentView[];
   total: number;
   totalPages: number;
   currentPage: number;
 }> => {
   try {
-    const where: any = {};
+    // Validate and normalize pagination
+    const pageNum = Number(page) || 1;
+    const limitNum = Number(limit) || 10;
 
-    if (filters.status) where.status = filters.status;
-    if (filters.clientId) where.posterId = filters.clientId;
-    if (filters.freelancerId) where.freelancerId = filters.freelancerId;
-    if (filters.bidId) where.bidId = filters.bidId;
-    if (filters.dateFrom || filters.dateTo) {
-      where.createdAt = {};
-      if (filters.dateFrom) where.createdAt.$gte = filters.dateFrom;
-      if (filters.dateTo) where.createdAt.$lte = filters.dateTo;
+    if (pageNum < 1) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Page must be greater than 0');
     }
 
-    const skip = (page - 1) * limit;
+    if (limitNum < 1 || limitNum > 100) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Limit must be between 1 and 100'
+      );
+    }
 
-    const [payments, total] = await Promise.all([
-      PaymentModel.find(where)
-        .populate({
-          path: 'bidId',
-          populate: [
-            {
-              path: 'taskId',
-              select: 'title',
-            },
-            {
-              path: 'taskerId',
-              select: 'name email',
-            },
-          ],
-        })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      PaymentModel.countDocuments(where),
-    ]);
+    // Build query object compatible with PaymentModel fields
+    const queryObj: Record<string, unknown> = {};
 
-    const totalPages = Math.ceil(total / limit);
+    if (filters.status) queryObj.status = filters.status;
+    if (filters.clientId) queryObj.posterId = filters.clientId;
+    if (filters.freelancerId) queryObj.freelancerId = filters.freelancerId;
+    if (filters.bidId) queryObj.bidId = filters.bidId;
+
+    if (filters.dateFrom || filters.dateTo) {
+      const createdAt: any = {};
+      if (filters.dateFrom) createdAt.$gte = filters.dateFrom;
+      if (filters.dateTo) createdAt.$lte = filters.dateTo;
+      queryObj.createdAt = createdAt;
+    }
+
+    // Use QueryBuilder for filter/sort/pagination
+    const qb = new QueryBuilder<IPayment>(PaymentModel.find(), {
+      ...queryObj,
+      page: pageNum,
+      limit: limitNum,
+    })
+      .filter()
+      .sort() // default '-createdAt'
+      .paginate();
+
+    // Deep populate bid -> task and tasker
+    qb.modelQuery = qb.modelQuery.populate({
+      path: 'bidId',
+      populate: [
+        { path: 'taskId', select: 'title' },
+        { path: 'taskerId', select: 'name email' },
+      ],
+    });
+
+    const payments = await qb.modelQuery;
+    const pageInfo = await qb.getPaginationInfo();
 
     return {
-      payments: payments as IPayment[],
-      total,
-      totalPages,
-      currentPage: page,
+      payments: payments.map(mapPaymentToView),
+      total: pageInfo.total,
+      totalPages: pageInfo.totalPage,
+      currentPage: pageInfo.page,
     };
   } catch (error) {
     const errorMessage =
@@ -656,100 +470,33 @@ export const getPayments = async (
   }
 };
 
-// Get payment statistics
-export const getPaymentStats = async (
-  filters?: IPaymentFilters
-): Promise<IPaymentStats> => {
-  try {
-    const where: any = {};
+// Payment stats overview (growth metrics similar to Task stats)
+export const getPaymentStatsOverview = async () => {
+  const builder = new AggregationBuilder(PaymentModel);
 
-    if (filters?.clientId) where.posterId = filters.clientId;
-    if (filters?.freelancerId) where.freelancerId = filters.freelancerId;
-    if (filters?.dateFrom || filters?.dateTo) {
-      where.createdAt = {};
-      if (filters.dateFrom) where.createdAt.$gte = filters.dateFrom;
-      if (filters.dateTo) where.createdAt.$lte = filters.dateTo;
-    }
+  const allPayments = await builder.calculateGrowth({ period: 'month' });
 
-    const [totalStats, statusBreakdown, monthlyTrend] = await Promise.all([
-      PaymentModel.aggregate([
-        { $match: where },
-        {
-          $group: {
-            _id: null,
-            totalPayments: { $sum: 1 },
-            totalAmount: { $sum: '$amount' },
-            totalPlatformFees: { $sum: '$platformFee' },
-            totalFreelancerPayouts: { $sum: '$freelancerAmount' },
-            averagePayment: { $avg: '$amount' },
-          },
-        },
-      ]),
-      PaymentModel.aggregate([
-        { $match: where },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-      PaymentModel.aggregate([
-        { $match: where },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' },
-            },
-            totalAmount: { $sum: '$amount' },
-            paymentCount: { $sum: 1 },
-          },
-        },
-        { $sort: { '_id.year': -1, '_id.month': -1 } },
-        { $limit: 12 },
-      ]),
-    ]);
+  const released = await builder.calculateGrowth({
+    filter: { status: PAYMENT_STATUS.RELEASED },
+    period: 'month',
+  });
 
-    const stats = totalStats[0] || {
-      totalPayments: 0,
-      totalAmount: 0,
-      totalPlatformFees: 0,
-      totalFreelancerPayouts: 0,
-      averagePayment: 0,
-    };
+  const pending = await builder.calculateGrowth({
+    filter: { status: PAYMENT_STATUS.PENDING },
+    period: 'month',
+  });
 
-    const statusBreakdownObj: Record<string, number> = {};
-    statusBreakdown.forEach((item: any) => {
-      statusBreakdownObj[item._id] = item.count;
-    });
+  const refunded = await builder.calculateGrowth({
+    filter: { status: PAYMENT_STATUS.REFUNDED },
+    period: 'month',
+  });
 
-    const monthlyTrendFormatted = monthlyTrend.map((item: any) => ({
-      month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
-      totalAmount: item.totalAmount,
-      paymentCount: item.paymentCount,
-    }));
-
-    return {
-      totalPayments: stats.totalPayments,
-      totalAmount: stats.totalAmount,
-      totalPlatformFees: stats.totalPlatformFees,
-      totalFreelancerPayouts: stats.totalFreelancerPayouts,
-      pendingPayments: statusBreakdownObj[PAYMENT_STATUS.PENDING] || 0,
-      completedPayments: statusBreakdownObj[PAYMENT_STATUS.RELEASED] || 0,
-      refundedPayments: statusBreakdownObj[PAYMENT_STATUS.REFUNDED] || 0,
-      averagePayment: stats.averagePayment,
-      statusBreakdown: statusBreakdownObj as any,
-      monthlyTrend: monthlyTrendFormatted,
-    };
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error occurred';
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Failed to get payment stats: ${errorMessage}`
-    );
-  }
+  return {
+    allPayments,
+    released,
+    pending,
+    refunded,
+  };
 };
 
 // Handle Stripe webhook events
@@ -762,7 +509,7 @@ export const handleWebhookEvent = async (event: any): Promise<void> => {
       await handlePaymentFailed(event.data.object);
       break;
     case 'account.updated':
-      await handleAccountUpdated(event.data.object);
+      await StripeConnectService.handleAccountUpdated(event.data.object);
       break;
     case 'payment_intent.amount_capturable_updated':
       await handleAmountCapturableUpdated(event.data.object);
@@ -846,21 +593,7 @@ const handlePaymentFailed = async (paymentIntent: any): Promise<void> => {
   }
 };
 
-// Handle account updated webhook
-const handleAccountUpdated = async (account: any): Promise<void> => {
-  const completed = account.charges_enabled && account.payouts_enabled;
-
-  await StripeAccountModel.updateMany(
-    {
-      stripeAccountId: account.id,
-    },
-    {
-      onboardingCompleted: completed,
-      chargesEnabled: account.charges_enabled,
-      payoutsEnabled: account.payouts_enabled,
-    }
-  );
-};
+// Moved to stripeConnected.service.ts
 
 // Handle amount capturable updated webhook (manual capture flow)
 const handleAmountCapturableUpdated = async (
@@ -942,7 +675,7 @@ export const getUserPayments = async (
   page: number = 1,
   limit: number = 10
 ): Promise<{
-  payments: IPayment[];
+  payments: IPaymentView[];
   total: number;
   totalPages: number;
   currentPage: number;
@@ -956,7 +689,7 @@ export const getUserPayments = async (
     const paginatedPayments = payments.slice(skip, skip + limit);
 
     return {
-      payments: paginatedPayments,
+      payments: paginatedPayments.map(mapPaymentToView),
       total,
       totalPages,
       currentPage: page,
@@ -971,18 +704,88 @@ export const getUserPayments = async (
   }
 };
 
-// Get user payment statistics
+// Get user payment statistics (direct aggregation)
 export const getUserPaymentStats = async (
   userId: string
 ): Promise<IPaymentStats> => {
   try {
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    const filters: IPaymentFilters = {
-      posterId: userObjectId,
-      freelancerId: userObjectId,
+
+    const matchStage = {
+      $or: [{ posterId: userObjectId }, { freelancerId: userObjectId }],
     };
 
-    return await getPaymentStats(filters);
+    const [totalStats, statusBreakdown, monthlyTrend] = await Promise.all([
+      PaymentModel.aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: null,
+            totalPayments: { $sum: 1 },
+            totalAmount: { $sum: '$amount' },
+            totalPlatformFees: { $sum: '$platformFee' },
+            totalFreelancerPayouts: { $sum: '$freelancerAmount' },
+            averagePayment: { $avg: '$amount' },
+          },
+        },
+      ]),
+      PaymentModel.aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+      PaymentModel.aggregate([
+        { $match: matchStage },
+        {
+          $group: {
+            _id: {
+              year: { $year: '$createdAt' },
+              month: { $month: '$createdAt' },
+            },
+            totalAmount: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+          },
+        },
+        { $sort: { '_id.year': -1, '_id.month': -1 } },
+        { $limit: 12 },
+      ]),
+    ]);
+
+    const stats = totalStats[0] || {
+      totalPayments: 0,
+      totalAmount: 0,
+      totalPlatformFees: 0,
+      totalFreelancerPayouts: 0,
+      averagePayment: 0,
+    };
+
+    const statusBreakdownObj: Record<string, number> = {};
+    statusBreakdown.forEach((item: any) => {
+      statusBreakdownObj[item._id] = item.count;
+    });
+
+    const monthlyTrendFormatted = monthlyTrend.map((item: any) => ({
+      month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
+      totalAmount: item.totalAmount,
+      paymentCount: item.paymentCount,
+    }));
+
+    return {
+      totalPayments: stats.totalPayments,
+      totalAmount: stats.totalAmount,
+      totalPlatformFees: stats.totalPlatformFees,
+      totalFreelancerPayouts: stats.totalFreelancerPayouts,
+      pendingPayments: statusBreakdownObj[PAYMENT_STATUS.PENDING] || 0,
+      completedPayments: statusBreakdownObj[PAYMENT_STATUS.RELEASED] || 0,
+      refundedPayments: statusBreakdownObj[PAYMENT_STATUS.REFUNDED] || 0,
+      averagePayment: stats.averagePayment,
+      statusBreakdown: statusBreakdownObj as any,
+      monthlyTrend: monthlyTrendFormatted,
+    };
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';
@@ -993,20 +796,7 @@ export const getUserPaymentStats = async (
   }
 };
 
-const deleteStripeAccountService = async (accountId: string) => {
-  try {
-    // Delete account from Stripe
-    const deleted = await stripe.accounts.del(accountId);
-
-    if (!deleted.deleted) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Failed to delete account');
-    }
-
-    return deleted; // { id, object, deleted: true }
-  } catch (error: any) {
-    throw handleStripeError(error);
-  }
-};
+// Moved to stripeConnected.service.ts
 
 // Get payment history for poster, tasker, super admin with QueryBuilder
 const getPaymentHistory = async (
@@ -1127,21 +917,17 @@ export const getCurrentIntentByBid = async (
 };
 
 const PaymentService = {
-  createStripeAccount,
   getPaymentHistory,
-  createOnboardingLink,
-  checkOnboardingStatus,
   createEscrowPayment,
   releaseEscrowPayment,
   refundEscrowPayment,
   getPaymentById,
   getPayments,
-  getPaymentStats,
+  getPaymentStatsOverview,
   getUserPayments,
   getUserPaymentStats,
   handleWebhookEvent,
   getCurrentIntentByBid,
-  deleteStripeAccountService,
 };
 
 export default PaymentService;

@@ -3,6 +3,7 @@ import PaymentController from './payment.controller';
 import WebhookController from './webhook.controller';
 import auth from '../../middlewares/auth';
 import { USER_ROLES } from '../../../enums/user';
+import { StripeConnectController } from './stripeConnect.controller';
 
 const router = express.Router();
 
@@ -17,19 +18,19 @@ router.post(
 router.post(
   '/stripe/account',
   auth(USER_ROLES.TASKER),
-  PaymentController.createStripeAccountController
+  StripeConnectController.createStripeAccountController
 );
 
 router.get(
   '/stripe/onboarding',
   auth(USER_ROLES.TASKER, USER_ROLES.SUPER_ADMIN),
-  PaymentController.getOnboardingLinkController
+  StripeConnectController.getOnboardingLinkController
 );
 
 router.get(
   '/stripe/onboarding-status',
   auth(USER_ROLES.TASKER, USER_ROLES.POSTER, USER_ROLES.SUPER_ADMIN),
-  PaymentController.checkOnboardingStatusController
+  StripeConnectController.checkOnboardingStatusController
 );
 
 // Payment history route for poster, tasker, super admin
@@ -66,7 +67,7 @@ router.get(
 );
 
 router.get(
-  '/stats/overview',
+  '/stats',
   auth(USER_ROLES.SUPER_ADMIN),
   PaymentController.getPaymentStatsController
 );

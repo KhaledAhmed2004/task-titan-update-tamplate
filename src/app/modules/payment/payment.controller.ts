@@ -5,43 +5,15 @@ import sendResponse from '../../../shared/sendResponse';
 import ApiError from '../../../errors/ApiError';
 import mongoose from 'mongoose';
 import PaymentService, {
-  createStripeAccount,
-  createOnboardingLink,
-  checkOnboardingStatus,
   refundEscrowPayment,
   getPaymentById,
   getPayments,
-  getPaymentStats,
-  handleWebhookEvent,
+  getPaymentStatsOverview,
   getCurrentIntentByBid,
 } from './payment.service';
 import { IPaymentFilters } from './payment.interface';
 import { JwtPayload } from 'jsonwebtoken';
-
-// Create Stripe Connect account for freelancers
-export const createStripeAccountController = catchAsync(
-  async (req: Request, res: Response) => {
-    const user = req.user as JwtPayload;
-    const userId = user.id;
-    const { accountType } = req.body;
-
-    if (!userId || !accountType) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'User ID and account type are required'
-      );
-    }
-
-    const result = await createStripeAccount({ userId, accountType });
-
-    sendResponse(res, {
-      success: true,
-      statusCode: httpStatus.CREATED,
-      message: 'Stripe account created successfully',
-      data: result,
-    });
-  }
-);
+import { deleteStripeAccountService } from './stripeConnect.service';
 
 // Get current intent (and client_secret if applicable) by bidId
 export const getCurrentIntentByBidController = catchAsync(
@@ -57,55 +29,10 @@ export const getCurrentIntentByBidController = catchAsync(
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message:
-        result.client_secret
-          ? 'Current intent retrieved with client_secret'
-          : 'Current intent retrieved (no client_secret needed)',
+      message: result.client_secret
+        ? 'Current intent retrieved with client_secret'
+        : 'Current intent retrieved (no client_secret needed)',
       data: result,
-    });
-  }
-);
-
-// Get onboarding link for freelancer
-export const getOnboardingLinkController = catchAsync(
-  async (req: Request, res: Response) => {
-    const user = req.user as JwtPayload;
-    const userId = user.id;
-
-    if (!userId) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'User ID is required');
-    }
-
-    const onboardingUrl = await createOnboardingLink(userId);
-
-    sendResponse(res, {
-      success: true,
-      statusCode: httpStatus.OK,
-      message: 'Onboarding link created successfully',
-      data: {
-        onboarding_url: onboardingUrl,
-      },
-    });
-  }
-);
-
-// Check onboarding status
-export const checkOnboardingStatusController = catchAsync(
-  async (req: Request, res: Response) => {
-    const user = req.user as JwtPayload;
-    const userId = user.id;
-
-    if (!userId) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'User ID is required');
-    }
-
-    const status = await checkOnboardingStatus(userId);
-
-    sendResponse(res, {
-      success: true,
-      statusCode: httpStatus.OK,
-      message: 'Onboarding status retrieved successfully',
-      data: status,
     });
   }
 );
@@ -185,23 +112,10 @@ export const getPaymentsController = catchAsync(
     if (dateFrom) filters.dateFrom = new Date(dateFrom as string);
     if (dateTo) filters.dateTo = new Date(dateTo as string);
 
-    // Parse pagination parameters
-    const pageNum = parseInt(page as string, 10) || 1;
-    const limitNum = parseInt(limit as string, 10) || 10;
-
-    // Validate pagination parameters
-    if (pageNum < 1) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Page must be greater than 0');
-    }
-
-    if (limitNum < 1 || limitNum > 100) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Limit must be between 1 and 100'
-      );
-    }
-
-    const result = await getPayments(filters, pageNum, limitNum);
+    const result = await getPayments(filters, {
+      page: Number(page) || 1,
+      limit: Number(limit) || 10,
+    });
 
     sendResponse(res, {
       success: true,
@@ -210,7 +124,7 @@ export const getPaymentsController = catchAsync(
       data: result.payments,
       pagination: {
         page: result.currentPage,
-        limit: limitNum,
+        limit: Number(limit) || 10,
         totalPage: result.totalPages,
         total: result.total,
       },
@@ -220,46 +134,14 @@ export const getPaymentsController = catchAsync(
 
 // Get payment statistics
 export const getPaymentStatsController = catchAsync(
-  async (req: Request, res: Response) => {
-    const { clientId, freelancerId, dateFrom, dateTo } = req.query;
-
-    // Build filters object
-    const filters: IPaymentFilters = {};
-    if (clientId)
-      filters.clientId = new mongoose.Types.ObjectId(clientId as string);
-    if (freelancerId)
-      filters.freelancerId = new mongoose.Types.ObjectId(
-        freelancerId as string
-      );
-    if (dateFrom) filters.dateFrom = new Date(dateFrom as string);
-    if (dateTo) filters.dateTo = new Date(dateTo as string);
-
-    const stats = await getPaymentStats(filters);
+  async (_req: Request, res: Response) => {
+    const stats = await getPaymentStatsOverview();
 
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message: 'Payment statistics retrieved successfully',
+      message: 'Payment stats overview retrieved successfully',
       data: stats,
-    });
-  }
-);
-
-// Handle Stripe webhook
-export const handleStripeWebhookController = catchAsync(
-  async (req: Request, res: Response) => {
-    const event = req.body;
-
-    if (!event || !event.type) {
-      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid webhook event');
-    }
-
-    await handleWebhookEvent(event);
-
-    sendResponse(res, {
-      success: true,
-      statusCode: httpStatus.OK,
-      message: 'Webhook processed successfully',
     });
   }
 );
@@ -267,7 +149,7 @@ export const handleStripeWebhookController = catchAsync(
 const deleteStripeAccountController = catchAsync(async (req, res) => {
   const { accountId } = req.params;
 
-  const deletedAccount = await PaymentService.deleteStripeAccountService(
+  const deletedAccount = await deleteStripeAccountService(
     accountId
   );
 
@@ -290,25 +172,21 @@ const getPaymentHistoryController = catchAsync(
     sendResponse(res, {
       success: result.success,
       statusCode: httpStatus.OK,
-      message: result.pagination.total > 0 
-        ? `Payment history retrieved successfully. Found ${result.pagination.total} payment(s).`
-        : 'No payment history found for this user.',
+      message:
+        result.pagination.total > 0
+          ? `Payment history retrieved successfully. Found ${result.pagination.total} payment(s).`
+          : 'No payment history found for this user.',
       data: result.data,
       pagination: result.pagination,
-      
     });
   }
 );
 
 const PaymentController = {
-  createStripeAccountController,
-  getOnboardingLinkController,
-  checkOnboardingStatusController,
   refundPaymentController,
   getPaymentByIdController,
   getPaymentsController,
   getPaymentStatsController,
-  handleStripeWebhookController,
   deleteStripeAccountController,
   getPaymentHistoryController,
   getCurrentIntentByBidController,
