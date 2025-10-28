@@ -40,6 +40,11 @@ const allowedOrigins = [
   'http://localhost:3002',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:5174',
+  // Local backend preview ports for static test pages
+  'http://localhost:5000',
+  'http://localhost:5001',
+  'http://127.0.0.1:5000',
+  'http://127.0.0.1:5001',
 ];
 
 app.use(
@@ -103,6 +108,8 @@ app.use(requestLogger);
 // -------------------
 app.use(express.static('uploads'));
 app.use('/uploads', express.static('uploads'));
+// Serve public test utilities (e.g., messaging-test.html)
+app.use(express.static('public'));
 
 // -------------------
 // Swagger
