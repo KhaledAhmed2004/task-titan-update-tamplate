@@ -3,6 +3,7 @@ import { getRedisClient } from '../../config/redis';
 const ONLINE_SET = 'presence:online';
 const LAST_ACTIVE_PREFIX = 'presence:lastActive:'; // presence:lastActive:<userId>
 const USER_ROOMS_PREFIX = 'presence:userRooms:'; // presence:userRooms:<userId>
+const CONN_COUNT_PREFIX = 'presence:connCount:'; // presence:connCount:<userId>
 
 export const setOnline = async (userId: string) => {
   const redis = getRedisClient();
@@ -46,4 +47,31 @@ export const removeUserRoom = async (userId: string, chatId: string) => {
 export const getUserRooms = async (userId: string) => {
   const redis = getRedisClient();
   return await redis.smembers(USER_ROOMS_PREFIX + userId);
+};
+
+export const clearUserRooms = async (userId: string) => {
+  const redis = getRedisClient();
+  await redis.del(USER_ROOMS_PREFIX + userId);
+};
+
+export const incrConnCount = async (userId: string) => {
+  const redis = getRedisClient();
+  return await (redis as any).incr(CONN_COUNT_PREFIX + userId);
+};
+
+export const decrConnCount = async (userId: string) => {
+  const redis = getRedisClient();
+  const key = CONN_COUNT_PREFIX + userId;
+  const res = await (redis as any).decr(key);
+  if (typeof res === 'number' && res < 0) {
+    await redis.set(key, '0');
+    return 0;
+  }
+  return typeof res === 'number' ? res : 0;
+};
+
+export const getConnCount = async (userId: string) => {
+  const redis = getRedisClient();
+  const v = await redis.get(CONN_COUNT_PREFIX + userId);
+  return v ? Number(v) : 0;
 };

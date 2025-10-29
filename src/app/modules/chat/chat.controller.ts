@@ -14,7 +14,7 @@ const createChat = catchAsync(async (req: Request, res: Response) => {
   const chat = await ChatService.createChatToDB(participants);
 
   sendResponse(res, {
-    statusCode: StatusCodes.OK,
+    statusCode: StatusCodes.CREATED,
     success: true,
     message: 'Create Chat Successfully',
     data: chat,

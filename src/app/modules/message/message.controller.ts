@@ -8,7 +8,7 @@ import { JwtPayload } from 'jsonwebtoken';
 const sendMessage = catchAsync(async (req: Request, res: Response) => {
   const message = await MessageService.sendMessageToDB(req.body);
   sendResponse(res, {
-    statusCode: StatusCodes.OK,
+    statusCode: StatusCodes.CREATED,
     success: true,
     message: 'Send Message Successfully',
     data: message,

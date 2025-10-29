@@ -3,6 +3,7 @@ import { Message } from '../message/message.model';
 import { IChat } from './chat.interface';
 import { Chat } from './chat.model';
 import { isOnline, getLastActive } from '../../helpers/presenceHelper';
+import { getUnreadCountCached, setUnreadCount } from '../../helpers/unreadHelper';
 
 const createChatToDB = async (payload: any): Promise<IChat> => {
   const isExistChat: IChat | null = await Chat.findOne({
@@ -44,12 +45,22 @@ const getChatFromDB = async (user: any, search: string): Promise<IChat[]> => {
         .sort({ createdAt: -1 })
         .select('text offer createdAt sender');
 
-      // Compute unread count for current user
-      const unreadCount = await Message.countDocuments({
-        chatId: chat?._id,
-        sender: { $ne: user.id },
-        readBy: { $ne: user.id },
-      });
+      // Compute unread count for current user with Redis cache fallback
+      const cachedUnread = await getUnreadCountCached(String(chat?._id), String(user.id));
+      let unreadCount: number;
+      if (typeof cachedUnread === 'number') {
+        unreadCount = cachedUnread;
+      } else {
+        unreadCount = await Message.countDocuments({
+          chatId: chat?._id,
+          sender: { $ne: user.id },
+          readBy: { $ne: user.id },
+        });
+        // Cache the count for faster subsequent retrievals
+        try {
+          await setUnreadCount(String(chat?._id), String(user.id), unreadCount);
+        } catch {}
+      }
 
       // Presence of the other participant (first populated one)
       const other = data?.participants?.[0];

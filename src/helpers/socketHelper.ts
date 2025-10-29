@@ -13,6 +13,10 @@ import {
   removeUserRoom,
   updateLastActive,
   getUserRooms,
+  getLastActive,
+  incrConnCount,
+  decrConnCount,
+  clearUserRooms,
 } from '../app/helpers/presenceHelper';
 
 // -------------------------
@@ -65,6 +69,7 @@ const socket = (io: Server) => {
       // 🧩 STEP 2 — Mark Online & Join Personal Room
       // -----------------------------
       await setOnline(userId);
+      await incrConnCount(userId);
       await updateLastActive(userId);
       socket.join(USER_ROOM(userId)); // join user’s personal private room
       logger.info(
@@ -85,15 +90,26 @@ const socket = (io: Server) => {
       // ---------------------------------------------
       socket.on('JOIN_CHAT', async ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
+        // Security: Ensure only chat participants can join the room
+        const allowed = await Chat.exists({ _id: chatId, participants: userId });
+        if (!allowed) {
+          socket.emit('ACK_ERROR', {
+            message: 'You are not a participant of this chat',
+            chatId: String(chatId),
+          });
+          handleEventProcessed('JOIN_CHAT_DENIED', `for chat_id: ${chatId}`);
+          return;
+        }
         socket.join(CHAT_ROOM(chatId));
         await addUserRoom(userId, chatId);
         handleEventProcessed('JOIN_CHAT', `for chat_id: ${chatId}`);
 
         // Broadcast to others in the chat that this user is now online
+        const lastActive = await getLastActive(userId);
         io.to(CHAT_ROOM(chatId)).emit('USER_ONLINE', {
           userId,
           chatId,
-          lastActive: Date.now(),
+          lastActive,
         });
         logger.info(
           colors.green(`User ${userId} joined chat room ${CHAT_ROOM(chatId)}`)
@@ -150,15 +166,26 @@ const socket = (io: Server) => {
 
       socket.on('LEAVE_CHAT', async ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
+        // Guard: Ensure only participants can leave (consistency & logging)
+        const allowed = await Chat.exists({ _id: chatId, participants: userId });
+        if (!allowed) {
+          socket.emit('ACK_ERROR', {
+            message: 'You are not a participant of this chat',
+            chatId: String(chatId),
+          });
+          handleEventProcessed('LEAVE_CHAT_DENIED', `for chat_id: ${chatId}`);
+          return;
+        }
         socket.leave(CHAT_ROOM(chatId));
         await removeUserRoom(userId, chatId);
         handleEventProcessed('LEAVE_CHAT', `for chat_id: ${chatId}`);
 
         // Notify others that user went offline in this chat
+        const lastActive = await getLastActive(userId);
         io.to(CHAT_ROOM(chatId)).emit('USER_OFFLINE', {
           userId,
           chatId,
-          lastActive: Date.now(),
+          lastActive,
         });
         logger.info(
           colors.yellow(`User ${userId} left chat room ${CHAT_ROOM(chatId)}`)
@@ -170,6 +197,12 @@ const socket = (io: Server) => {
       // ---------------------------------------------
       socket.on('TYPING_START', async ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
+        // Guard: Only participants can emit typing events for a chat
+        const allowed = await Chat.exists({ _id: chatId, participants: userId });
+        if (!allowed) {
+          handleEventProcessed('TYPING_START_DENIED', `for chat_id: ${chatId}`);
+          return;
+        }
 
         // Throttle typing events per user per chat using Redis TTL key
         try {
@@ -192,6 +225,12 @@ const socket = (io: Server) => {
 
       socket.on('TYPING_STOP', async ({ chatId }: { chatId: string }) => {
         if (!chatId) return;
+        // Guard: Only participants can emit typing stop events
+        const allowed = await Chat.exists({ _id: chatId, participants: userId });
+        if (!allowed) {
+          handleEventProcessed('TYPING_STOP_DENIED', `for chat_id: ${chatId}`);
+          return;
+        }
         // Clear throttle key so next start can emit immediately
         try {
           const redis = getRedisClient();
@@ -301,20 +340,29 @@ const socket = (io: Server) => {
       // ---------------------------------------------
       socket.on('disconnect', async () => {
         try {
-          await setOffline(userId);
           await updateLastActive(userId);
+          const remaining = await decrConnCount(userId);
+          const lastActive = await getLastActive(userId);
 
-          // Notify all chat rooms this user participated in
-          try {
-            const rooms = await getUserRooms(userId);
-            for (const chatId of rooms || []) {
-              io.to(CHAT_ROOM(String(chatId))).emit('USER_OFFLINE', {
-                userId,
-                chatId: String(chatId),
-                lastActive: Date.now(),
-              });
-            }
-          } catch {}
+          // Only mark offline and broadcast if no other sessions remain
+          if (!remaining || remaining <= 0) {
+            await setOffline(userId);
+
+            // Notify all chat rooms this user participated in
+            try {
+              const rooms = await getUserRooms(userId);
+              for (const chatId of rooms || []) {
+                io.to(CHAT_ROOM(String(chatId))).emit('USER_OFFLINE', {
+                  userId,
+                  chatId: String(chatId),
+                  lastActive,
+                });
+              }
+              await clearUserRooms(userId);
+            } catch {}
+          } else {
+            logger.info(colors.yellow(`User ${userId} disconnected one session; ${remaining} session(s) remain.`));
+          }
 
           logger.info(colors.red(`User ${userId} disconnected`));
           logEvent('socket_disconnected', `for user_id: ${userId}`);

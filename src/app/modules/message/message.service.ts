@@ -7,6 +7,7 @@ import ApiError from '../../../errors/ApiError';
 import { StatusCodes } from 'http-status-codes';
 import QueryBuilder from '../../builder/QueryBuilder';
 import { isOnline } from '../../helpers/presenceHelper';
+import { incrementUnreadCount, setUnreadCount } from '../../helpers/unreadHelper';
 import { sendNotifications } from '../notification/notificationsHelper';
 
 const sendMessageToDB = async (payload: any): Promise<IMessage> => {
@@ -15,23 +16,24 @@ const sendMessageToDB = async (payload: any): Promise<IMessage> => {
     payload.attachments = [];
   }
 
+  // Authorization: sender must be a participant of the chat
+  const isParticipant = await Chat.exists({
+    _id: payload?.chatId,
+    participants: payload?.sender,
+  });
+  if (!isParticipant) {
+    throw new ApiError(StatusCodes.FORBIDDEN, 'You are not a participant of this chat');
+  }
+
   // save to DB
   const response = await Message.create(payload);
 
   //@ts-ignore
   const io = global.io;
   if (io) {
-    // Backward-compat global event
-    io.emit(`getMessage::${payload?.chatId}`, response);
     // Room-based event for chat participants
     io.to(`chat::${String(payload?.chatId)}`).emit('MESSAGE_SENT', {
-      messageId: String(response._id),
-      chatId: String(response.chatId),
-      sender: String(response.sender),
-      text: response.text,
-      type: response.type,
-      attachments: response.attachments,
-      createdAt: response.createdAt,
+      message: response,
     });
   }
 
@@ -44,6 +46,13 @@ const sendMessageToDB = async (payload: any): Promise<IMessage> => {
     const receivers = participants.filter(
       p => String(p) !== String(response.sender)
     );
+
+    // Increment unread count for receivers
+    for (const receiverId of receivers) {
+      try {
+        await incrementUnreadCount(String(response.chatId), String(receiverId), 1);
+      } catch {}
+    }
 
     for (const receiverId of receivers) {
       const online = await isOnline(receiverId);
@@ -85,8 +94,12 @@ const getMessageFromDB = async (
   // Fetch messages
   let messages = await queryBuilder.modelQuery;
 
-  // Reverse messages so that oldest is first if your UI appends messages top -> bottom
-  messages = messages.reverse();
+  // Explicitly sort by createdAt ASC for predictable ordering
+  messages = messages.sort(
+    (a: any, b: any) =>
+      new Date(a?.createdAt as any).getTime() -
+      new Date(b?.createdAt as any).getTime()
+  );
 
   // Get pagination info
   const pagination = await queryBuilder.getPaginationInfo();
@@ -153,6 +166,11 @@ const markChatAsRead = async (chatId: string, userId: string) => {
       });
     }
   }
+
+  // Reset unread count cache for this user on this chat
+  try {
+    await setUnreadCount(String(chatId), String(userId), 0);
+  } catch {}
 
   return { modifiedCount: toUpdate.length, updatedIds: toUpdate.map(m => String(m._id)) } as any;
 };
