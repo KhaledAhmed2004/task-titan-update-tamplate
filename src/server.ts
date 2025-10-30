@@ -1,4 +1,3 @@
-import colors from 'colors';
 import mongoose from 'mongoose';
 import { Server } from 'socket.io';
 import app from './app';
@@ -20,8 +19,12 @@ async function main() {
   try {
     // Environment & config logs
     logger.info(`🌐 Environment: ${config.node_env || 'unknown'}`);
-    logger.info(`🛠️ Debug Mode: ${config.node_env === 'development' ? 'ON' : 'OFF'}`);
-    logger.info(`🔗 Redis URL: ${process.env.REDIS_URL || 'redis://localhost:6379'}`);
+    logger.info(
+      `🛠️ Debug Mode: ${config.node_env === 'development' ? 'ON' : 'OFF'}`
+    );
+    logger.info(
+      `🔗 Redis URL: ${process.env.REDIS_URL || 'redis://localhost:6379'}`
+    );
 
     mongoose.connect(config.database_url as string);
     logger.info('🚀 Database connected successfully');
@@ -55,16 +58,23 @@ async function main() {
     // Startup Summary
     const summary = [
       `📝 Startup Summary:`,
-      `      - DB connected ${mongoose.connection.readyState === 1 ? '✅' : '❌'}`,
+      `      - DB connected ${
+        mongoose.connection.readyState === 1 ? '✅' : '❌'
+      }`,
       `      - Redis connected ${redisOk ? '✅' : '❌'}`,
       `      - CacheHelper initialized ${cache ? '✅' : '❌'}`,
       `      - RateLimit active ✅`,
-      `      - Debug Mode ${config.node_env === 'development' ? 'ON ✅' : 'OFF ❌'}`,
+      `      - Debug Mode ${
+        config.node_env === 'development' ? 'ON ✅' : 'OFF ❌'
+      }`,
     ].join('\n');
     logger.info(summary);
   } catch (error) {
     errorLogger.error('❌ Database connection failed');
-    notifyCritical('Database Connection Failed', (error as Error)?.message || 'Unknown error');
+    notifyCritical(
+      'Database Connection Failed',
+      (error as Error)?.message || 'Unknown error'
+    );
   }
 
   //handle unhandleRejection
@@ -72,7 +82,10 @@ async function main() {
     if (server) {
       server.close(() => {
         errorLogger.error('❌ UnhandledRejection Detected');
-        notifyCritical('Unhandled Rejection', (error as Error)?.message || 'Unknown error');
+        notifyCritical(
+          'Unhandled Rejection',
+          (error as Error)?.message || 'Unknown error'
+        );
         process.exit(1);
       });
     } else {

@@ -16,14 +16,10 @@ const requestLogger_1 = require("./app/middlewares/requestLogger");
 const path_1 = __importDefault(require("path"));
 const passport_1 = __importDefault(require("passport"));
 const app = (0, express_1.default)();
-// -------------------
 // Morgan logging
-// -------------------
 app.use(morgen_1.Morgan.successHandler);
 app.use(morgen_1.Morgan.errorHandler);
-// -------------------
 // CORS setup
-// -------------------
 const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:3001',
@@ -42,6 +38,12 @@ const allowedOrigins = [
     'http://localhost:3002',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
+    // Local backend preview ports for static test pages
+    'http://localhost:5000',
+    'http://localhost:5001',
+    'http://127.0.0.1:5000',
+    'http://127.0.0.1:5001',
+    'http://10.10.7.33:5001',
 ];
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
@@ -68,9 +70,7 @@ app.options('*', (0, cors_1.default)({
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true,
 }));
-// -------------------
 // Body parser
-// -------------------
 // Special handling for webhook routes - they need raw body for signature verification
 app.use('/api/v1/payments/webhook', express_1.default.raw({ type: 'application/json' }));
 // For all other routes, use JSON parsing
@@ -81,31 +81,20 @@ app.use((req, res, next) => {
     express_1.default.json()(req, res, next);
 });
 app.use(express_1.default.urlencoded({ extended: true }));
-// -------------------
 // Passport
-// -------------------
 app.use(passport_1.default.initialize());
-// -------------------
 // Request/Response logging
-// -------------------
 app.use(requestLogger_1.requestLogger);
-// -------------------
 // Static files
-// -------------------
 app.use(express_1.default.static('uploads'));
 app.use('/uploads', express_1.default.static('uploads'));
-// -------------------
+app.use(express_1.default.static('public'));
 // Swagger
-// -------------------
 const swaggerDocument = yamljs_1.default.load(path_1.default.join(__dirname, '../public/swagger.yaml'));
 app.use('/api/v1/docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.default.setup(swaggerDocument));
-// -------------------
 // API routes
-// -------------------
 app.use('/api/v1', routes_1.default);
-// -------------------
 // Live response
-// -------------------
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -210,13 +199,9 @@ app.get('/', (req, res) => {
     </html>
   `);
 });
-// -------------------
 // Global error handler
-// -------------------
 app.use(globalErrorHandler_1.default);
-// -------------------
 // 404 handler
-// -------------------
 app.use((req, res) => {
     res.status(http_status_codes_1.StatusCodes.NOT_FOUND).json({
         success: false,

@@ -12,7 +12,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleAccountUpdated = exports.deleteStripeAccountService = exports.getFreelancerAccountOrThrow = exports.ensureFreelancerOnboarded = exports.checkOnboardingStatus = exports.createOnboardingLink = exports.createStripeAccount = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const http_status_1 = __importDefault(require("http-status"));
 const ApiError_1 = __importDefault(require("../../../errors/ApiError"));
@@ -74,7 +73,6 @@ const createStripeAccount = (data) => __awaiter(void 0, void 0, void 0, function
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Failed to create Stripe account: ${(0, stripe_1.handleStripeError)(error)}`);
     }
 });
-exports.createStripeAccount = createStripeAccount;
 // Create onboarding link for freelancer
 const createOnboardingLink = (userId) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -95,7 +93,6 @@ const createOnboardingLink = (userId) => __awaiter(void 0, void 0, void 0, funct
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Failed to create onboarding link: ${(0, stripe_1.handleStripeError)(error)}`);
     }
 });
-exports.createOnboardingLink = createOnboardingLink;
 // Check if freelancer has completed Stripe onboarding
 const checkOnboardingStatus = (userId) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
@@ -125,7 +122,6 @@ const checkOnboardingStatus = (userId) => __awaiter(void 0, void 0, void 0, func
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, `Failed to check onboarding status: ${(0, stripe_1.handleStripeError)(error)}`);
     }
 });
-exports.checkOnboardingStatus = checkOnboardingStatus;
 // Ensure freelancer is onboarded before allowing escrow actions
 const ensureFreelancerOnboarded = (taskerId) => __awaiter(void 0, void 0, void 0, function* () {
     const freelancerStripeAccount = yield payment_model_1.StripeAccount.isExistAccountByUserId(taskerId);
@@ -134,7 +130,6 @@ const ensureFreelancerOnboarded = (taskerId) => __awaiter(void 0, void 0, void 0
     }
     return freelancerStripeAccount;
 });
-exports.ensureFreelancerOnboarded = ensureFreelancerOnboarded;
 // Get freelancer account or throw
 const getFreelancerAccountOrThrow = (userId) => __awaiter(void 0, void 0, void 0, function* () {
     const freelancerStripeAccount = yield payment_model_1.StripeAccount.isExistAccountByUserId(userId);
@@ -143,7 +138,6 @@ const getFreelancerAccountOrThrow = (userId) => __awaiter(void 0, void 0, void 0
     }
     return freelancerStripeAccount;
 });
-exports.getFreelancerAccountOrThrow = getFreelancerAccountOrThrow;
 // Delete a Stripe Connect account
 const deleteStripeAccountService = (accountId) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -157,7 +151,6 @@ const deleteStripeAccountService = (accountId) => __awaiter(void 0, void 0, void
         throw (0, stripe_1.handleStripeError)(error);
     }
 });
-exports.deleteStripeAccountService = deleteStripeAccountService;
 // Update local account status from Stripe account.update webhook
 const handleAccountUpdated = (account) => __awaiter(void 0, void 0, void 0, function* () {
     const completed = account.charges_enabled && account.payouts_enabled;
@@ -169,14 +162,13 @@ const handleAccountUpdated = (account) => __awaiter(void 0, void 0, void 0, func
         payoutsEnabled: account.payouts_enabled,
     });
 });
-exports.handleAccountUpdated = handleAccountUpdated;
-const StripeConnectedService = {
-    createStripeAccount: exports.createStripeAccount,
-    createOnboardingLink: exports.createOnboardingLink,
-    checkOnboardingStatus: exports.checkOnboardingStatus,
-    ensureFreelancerOnboarded: exports.ensureFreelancerOnboarded,
-    getFreelancerAccountOrThrow: exports.getFreelancerAccountOrThrow,
-    deleteStripeAccountService: exports.deleteStripeAccountService,
-    handleAccountUpdated: exports.handleAccountUpdated,
+const StripeConnectService = {
+    createStripeAccount,
+    createOnboardingLink,
+    checkOnboardingStatus,
+    ensureFreelancerOnboarded,
+    getFreelancerAccountOrThrow,
+    deleteStripeAccountService,
+    handleAccountUpdated,
 };
-exports.default = StripeConnectedService;
+exports.default = StripeConnectService;

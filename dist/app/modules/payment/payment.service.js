@@ -1,27 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -39,16 +16,14 @@ exports.getCurrentIntentByBid = exports.getUserPaymentStats = exports.getUserPay
 const payment_interface_1 = require("./payment.interface");
 const mongoose_1 = __importDefault(require("mongoose"));
 const payment_model_1 = require("./payment.model");
-const task_model_1 = require("../task/task.model");
-const task_interface_1 = require("../task/task.interface");
-const bid_model_1 = require("../bid/bid.model");
+const domain_adapter_1 = require("./domain.adapter");
 const ApiError_1 = __importDefault(require("../../../errors/ApiError"));
 const http_status_1 = __importDefault(require("http-status"));
 const QueryBuilder_1 = __importDefault(require("../../builder/QueryBuilder"));
 const AggregationBuilder_1 = __importDefault(require("../../builder/AggregationBuilder"));
-const stripeConnected_service_1 = require("./stripeConnected.service");
 const stripe_1 = require("../../../config/stripe");
 const stripe_adapter_1 = require("./stripe.adapter");
+const stripeConnect_service_1 = __importDefault(require("./stripeConnect.service"));
 // Helper to present sender/receiver aliases for readability
 const mapPaymentToView = (payment) => {
     const base = typeof (payment === null || payment === void 0 ? void 0 : payment.toObject) === 'function' ? payment.toObject() : payment;
@@ -60,15 +35,7 @@ const mapPaymentToView = (payment) => {
 // Create escrow payment when bid is accepted
 // Escrow helpers (internal)
 const getBidAndTask = (bidId) => __awaiter(void 0, void 0, void 0, function* () {
-    const bid = yield bid_model_1.BidModel.findById(bidId).populate('taskId');
-    if (!bid) {
-        throw new ApiError_1.default(http_status_1.default.NOT_FOUND, 'Bid not found');
-    }
-    const task = bid.taskId;
-    if (!bid.taskerId) {
-        throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Bid does not have an assigned freelancer');
-    }
-    return { bid, task };
+    return domain_adapter_1.PaymentDomainAdapter.getBidAndTask(String(bidId));
 });
 // Moved to stripeConnected.service.ts
 const ensureNoExistingPaymentForBid = (bidId) => __awaiter(void 0, void 0, void 0, function* () {
@@ -118,8 +85,8 @@ const createEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function
         if (!data.posterId) {
             throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'Poster ID is required for escrow payment');
         }
-        const { bid, task } = yield getBidAndTask(data.bidId);
-        yield (0, stripeConnected_service_1.ensureFreelancerOnboarded)(bid.taskerId);
+        const { bid, task, freelancerId } = yield getBidAndTask(data.bidId);
+        yield stripeConnect_service_1.default.ensureFreelancerOnboarded(freelancerId);
         yield ensureNoExistingPaymentForBid(data.bidId);
         const platformFee = (0, stripe_1.calculatePlatformFee)(data.amount);
         const freelancerAmount = (0, stripe_1.calculateFreelancerAmount)(data.amount);
@@ -153,10 +120,7 @@ const ensureHeldStatus = (payment) => {
     }
 };
 const ensureClientAuthorized = (taskId, clientId) => __awaiter(void 0, void 0, void 0, function* () {
-    const task = yield task_model_1.TaskModel.findById(taskId);
-    if (!task || task.userId.toString() !== (clientId === null || clientId === void 0 ? void 0 : clientId.toString())) {
-        throw new ApiError_1.default(http_status_1.default.FORBIDDEN, 'You are not authorized to release this payment');
-    }
+    yield domain_adapter_1.PaymentDomainAdapter.ensureClientAuthorized(String(taskId), clientId ? String(clientId) : undefined);
 });
 const getChargeIdForIntent = (intentId) => __awaiter(void 0, void 0, void 0, function* () {
     const paymentIntent = yield stripe_1.stripe.paymentIntents.retrieve(intentId, {
@@ -193,7 +157,7 @@ const createTransferToFreelancer = (amount, currency, destination, sourceChargeI
 });
 const markPaymentReleasedAndBidCompleted = (paymentId, bidId) => __awaiter(void 0, void 0, void 0, function* () {
     yield payment_model_1.Payment.updatePaymentStatus(paymentId, payment_interface_1.PAYMENT_STATUS.RELEASED);
-    yield bid_model_1.BidModel.findByIdAndUpdate(bidId, { status: 'completed' });
+    yield domain_adapter_1.PaymentDomainAdapter.markBidCompleted(String(bidId));
 });
 const releaseEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
@@ -202,7 +166,7 @@ const releaseEscrowPayment = (data) => __awaiter(void 0, void 0, void 0, functio
         ensureHeldStatus(payment);
         yield ensureClientAuthorized(payment.taskId, data.clientId);
         const { chargeId } = yield getChargeIdForIntent(payment.stripePaymentIntentId);
-        const freelancerStripeAccount = yield (0, stripeConnected_service_1.getFreelancerAccountOrThrow)(payment.freelancerId);
+        const freelancerStripeAccount = yield stripeConnect_service_1.default.getFreelancerAccountOrThrow(payment.freelancerId);
         yield createTransferToFreelancer(payment.freelancerAmount, payment.currency || stripe_1.DEFAULT_CURRENCY, freelancerStripeAccount.stripeAccountId, chargeId, {
             bid_id: ((_b = (_a = payment.bidId) === null || _a === void 0 ? void 0 : _a.toString) === null || _b === void 0 ? void 0 : _b.call(_a)) || String(payment.bidId),
             payment_id: ((_d = (_c = payment._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c)) || String(payment._id),
@@ -254,9 +218,7 @@ const refundEscrowPayment = (paymentId, reason) => __awaiter(void 0, void 0, voi
         ensureRefundable(payment);
         const refund = yield createRefundForIntent(payment.stripePaymentIntentId, reason);
         yield markPaymentRefunded(paymentId, reason);
-        yield bid_model_1.BidModel.findByIdAndUpdate(payment.bidId, {
-            status: 'cancelled',
-        });
+        yield domain_adapter_1.PaymentDomainAdapter.markBidCancelled(String(payment.bidId));
         return {
             success: true,
             message: 'Payment refunded successfully',
@@ -319,13 +281,10 @@ const getPayments = (filters_1, ...args_1) => __awaiter(void 0, [filters_1, ...a
             .sort() // default '-createdAt'
             .paginate();
         // Deep populate bid -> task and tasker
-        qb.modelQuery = qb.modelQuery.populate({
-            path: 'bidId',
-            populate: [
-                { path: 'taskId', select: 'title' },
-                { path: 'taskerId', select: 'name email' },
-            ],
-        });
+        const populateOptions = domain_adapter_1.PaymentDomainAdapter.getPaymentsPopulateOptions();
+        if (populateOptions) {
+            qb.modelQuery = qb.modelQuery.populate(populateOptions);
+        }
         const payments = yield qb.modelQuery;
         const pageInfo = yield qb.getPaginationInfo();
         return {
@@ -375,7 +334,7 @@ const handleWebhookEvent = (event) => __awaiter(void 0, void 0, void 0, function
             yield handlePaymentFailed(event.data.object);
             break;
         case 'account.updated':
-            yield (0, stripeConnected_service_1.handleAccountUpdated)(event.data.object);
+            yield stripeConnect_service_1.default.handleAccountUpdated(event.data.object);
             break;
         case 'payment_intent.amount_capturable_updated':
             yield handleAmountCapturableUpdated(event.data.object);
@@ -406,7 +365,6 @@ const handlePaymentSucceeded = (paymentIntent) => __awaiter(void 0, void 0, void
 });
 // Handle payment failed webhook
 const handlePaymentFailed = (paymentIntent) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
     const bidId = paymentIntent.metadata.bid_id;
     // Update payment status to REFUNDED
     yield payment_model_1.Payment.updateMany({
@@ -416,27 +374,10 @@ const handlePaymentFailed = (paymentIntent) => __awaiter(void 0, void 0, void 0,
         status: payment_interface_1.PAYMENT_STATUS.REFUNDED,
     });
     // Reset bid status back to PENDING so it can be re-attempted
-    yield bid_model_1.BidModel.findByIdAndUpdate(bidId, {
-        status: 'pending',
-        paymentIntentId: null, // Clear the failed payment intent
-    });
+    yield domain_adapter_1.PaymentDomainAdapter.resetBidToPending(String(bidId), paymentIntent.id);
     // Revert task assignment and status if this bid was already accepted
     try {
-        const bid = yield bid_model_1.BidModel.findById(bidId);
-        if (bid) {
-            const task = yield task_model_1.TaskModel.findById(bid.taskId);
-            if (task) {
-                // Only revert if the task is currently assigned to this tasker
-                const assignedMatches = ((_a = task.assignedTo) === null || _a === void 0 ? void 0 : _a.toString()) === ((_b = bid.taskerId) === null || _b === void 0 ? void 0 : _b.toString());
-                if (assignedMatches) {
-                    yield task_model_1.TaskModel.findByIdAndUpdate(task._id, {
-                        status: task_interface_1.TaskStatus.OPEN,
-                        assignedTo: null,
-                        paymentIntentId: null,
-                    });
-                }
-            }
-        }
+        yield domain_adapter_1.PaymentDomainAdapter.revertTaskAssignmentIfMatches(String(bidId));
     }
     catch (revertErr) {
         console.error('Failed to revert task state after payment failure:', revertErr);
@@ -482,9 +423,8 @@ const handleAmountCapturableUpdated = (paymentIntent) => __awaiter(void 0, void 
             }
         }
         // Complete bid acceptance process after successful capture
-        const { BidService } = yield Promise.resolve().then(() => __importStar(require('../bid/bid.service')));
         try {
-            yield BidService.completeBidAcceptance(bidId);
+            yield domain_adapter_1.PaymentDomainAdapter.completeBidAcceptanceAfterCapture(String(bidId));
             // console.log(`Bid ${bidId} acceptance completed after capture (amount_capturable_updated).`);
         }
         catch (error) {

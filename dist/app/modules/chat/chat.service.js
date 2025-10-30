@@ -13,6 +13,7 @@ exports.ChatService = void 0;
 const message_model_1 = require("../message/message.model");
 const chat_model_1 = require("./chat.model");
 const presenceHelper_1 = require("../../helpers/presenceHelper");
+const unreadHelper_1 = require("../../helpers/unreadHelper");
 const createChatToDB = (payload) => __awaiter(void 0, void 0, void 0, function* () {
     const isExistChat = yield chat_model_1.Chat.findOne({
         participants: { $all: payload },
@@ -42,12 +43,24 @@ const getChatFromDB = (user, search) => __awaiter(void 0, void 0, void 0, functi
         })
             .sort({ createdAt: -1 })
             .select('text offer createdAt sender');
-        // Compute unread count for current user
-        const unreadCount = yield message_model_1.Message.countDocuments({
-            chatId: chat === null || chat === void 0 ? void 0 : chat._id,
-            sender: { $ne: user.id },
-            readBy: { $ne: user.id },
-        });
+        // Compute unread count for current user with Redis cache fallback
+        const cachedUnread = yield (0, unreadHelper_1.getUnreadCountCached)(String(chat === null || chat === void 0 ? void 0 : chat._id), String(user.id));
+        let unreadCount;
+        if (typeof cachedUnread === 'number') {
+            unreadCount = cachedUnread;
+        }
+        else {
+            unreadCount = yield message_model_1.Message.countDocuments({
+                chatId: chat === null || chat === void 0 ? void 0 : chat._id,
+                sender: { $ne: user.id },
+                readBy: { $ne: user.id },
+            });
+            // Cache the count for faster subsequent retrievals
+            try {
+                yield (0, unreadHelper_1.setUnreadCount)(String(chat === null || chat === void 0 ? void 0 : chat._id), String(user.id), unreadCount);
+            }
+            catch (_b) { }
+        }
         // Presence of the other participant (first populated one)
         const other = (_a = data === null || data === void 0 ? void 0 : data.participants) === null || _a === void 0 ? void 0 : _a[0];
         let presence = null;

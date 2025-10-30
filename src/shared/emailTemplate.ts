@@ -1,4 +1,13 @@
-import { ICreateAccount, IResetPassword } from '../types/emailTamplate';
+type ICreateAccount = {
+  name: string;
+  email: string;
+  otp: number;
+};
+
+type IResetPassword = {
+  email: string;
+  otp: number;
+};
 
 const createAccount = (values: ICreateAccount) => {
   const data = {

@@ -1,4 +1,9 @@
-import { IPaginationOptions } from '../types/pagination';
+export type IPaginationOptions = {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+};
 
 const calculatePagination = (options: IPaginationOptions) => {
   const page = Number(options.page || 1);

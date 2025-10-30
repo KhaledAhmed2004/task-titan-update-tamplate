@@ -13,15 +13,11 @@ import passport from 'passport';
 
 const app = express();
 
-// -------------------
 // Morgan logging
-// -------------------
 app.use(Morgan.successHandler);
 app.use(Morgan.errorHandler);
 
-// -------------------
 // CORS setup
-// -------------------
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -78,9 +74,7 @@ app.options(
   })
 );
 
-// -------------------
 // Body parser
-// -------------------
 // Special handling for webhook routes - they need raw body for signature verification
 app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
 
@@ -94,40 +88,27 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: true }));
 
-// -------------------
 // Passport
-// -------------------
 app.use(passport.initialize());
 
-// -------------------
 // Request/Response logging
-// -------------------
 app.use(requestLogger);
 
-// -------------------
 // Static files
-// -------------------
 app.use(express.static('uploads'));
 app.use('/uploads', express.static('uploads'));
-// Serve public test utilities (e.g., messaging-test.html)
 app.use(express.static('public'));
 
-// -------------------
 // Swagger
-// -------------------
 const swaggerDocument = YAML.load(
   path.join(__dirname, '../public/swagger.yaml')
 );
 app.use('/api/v1/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-// -------------------
 // API routes
-// -------------------
 app.use('/api/v1', router);
 
-// -------------------
 // Live response
-// -------------------
 app.get('/', (req: Request, res: Response) => {
   res.send(`
     <!DOCTYPE html>
@@ -233,14 +214,10 @@ app.get('/', (req: Request, res: Response) => {
   `);
 });
 
-// -------------------
 // Global error handler
-// -------------------
 app.use(globalErrorHandler);
 
-// -------------------
 // 404 handler
-// -------------------
 app.use((req, res) => {
   res.status(StatusCodes.NOT_FOUND).json({
     success: false,

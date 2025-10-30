@@ -24,7 +24,7 @@ const createChat = (0, catchAsync_1.default)((req, res) => __awaiter(void 0, voi
     console.log('participants', participants);
     const chat = yield chat_service_1.ChatService.createChatToDB(participants);
     (0, sendResponse_1.default)(res, {
-        statusCode: http_status_codes_1.StatusCodes.OK,
+        statusCode: http_status_codes_1.StatusCodes.CREATED,
         success: true,
         message: 'Create Chat Successfully',
         data: chat,

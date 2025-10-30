@@ -9,11 +9,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getUserRooms = exports.removeUserRoom = exports.addUserRoom = exports.getLastActive = exports.isOnline = exports.updateLastActive = exports.setOffline = exports.setOnline = void 0;
+exports.getConnCount = exports.decrConnCount = exports.incrConnCount = exports.clearUserRooms = exports.getUserRooms = exports.removeUserRoom = exports.addUserRoom = exports.getLastActive = exports.isOnline = exports.updateLastActive = exports.setOffline = exports.setOnline = void 0;
 const redis_1 = require("../../config/redis");
 const ONLINE_SET = 'presence:online';
 const LAST_ACTIVE_PREFIX = 'presence:lastActive:'; // presence:lastActive:<userId>
 const USER_ROOMS_PREFIX = 'presence:userRooms:'; // presence:userRooms:<userId>
+const CONN_COUNT_PREFIX = 'presence:connCount:'; // presence:connCount:<userId>
 const setOnline = (userId) => __awaiter(void 0, void 0, void 0, function* () {
     const redis = (0, redis_1.getRedisClient)();
     yield redis.sadd(ONLINE_SET, userId);
@@ -58,3 +59,30 @@ const getUserRooms = (userId) => __awaiter(void 0, void 0, void 0, function* () 
     return yield redis.smembers(USER_ROOMS_PREFIX + userId);
 });
 exports.getUserRooms = getUserRooms;
+const clearUserRooms = (userId) => __awaiter(void 0, void 0, void 0, function* () {
+    const redis = (0, redis_1.getRedisClient)();
+    yield redis.del(USER_ROOMS_PREFIX + userId);
+});
+exports.clearUserRooms = clearUserRooms;
+const incrConnCount = (userId) => __awaiter(void 0, void 0, void 0, function* () {
+    const redis = (0, redis_1.getRedisClient)();
+    return yield redis.incr(CONN_COUNT_PREFIX + userId);
+});
+exports.incrConnCount = incrConnCount;
+const decrConnCount = (userId) => __awaiter(void 0, void 0, void 0, function* () {
+    const redis = (0, redis_1.getRedisClient)();
+    const key = CONN_COUNT_PREFIX + userId;
+    const res = yield redis.decr(key);
+    if (typeof res === 'number' && res < 0) {
+        yield redis.set(key, '0');
+        return 0;
+    }
+    return typeof res === 'number' ? res : 0;
+});
+exports.decrConnCount = decrConnCount;
+const getConnCount = (userId) => __awaiter(void 0, void 0, void 0, function* () {
+    const redis = (0, redis_1.getRedisClient)();
+    const v = yield redis.get(CONN_COUNT_PREFIX + userId);
+    return v ? Number(v) : 0;
+});
+exports.getConnCount = getConnCount;

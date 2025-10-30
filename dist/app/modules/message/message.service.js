@@ -20,28 +20,29 @@ const ApiError_1 = __importDefault(require("../../../errors/ApiError"));
 const http_status_codes_1 = require("http-status-codes");
 const QueryBuilder_1 = __importDefault(require("../../builder/QueryBuilder"));
 const presenceHelper_1 = require("../../helpers/presenceHelper");
+const unreadHelper_1 = require("../../helpers/unreadHelper");
 const notificationsHelper_1 = require("../notification/notificationsHelper");
 const sendMessageToDB = (payload) => __awaiter(void 0, void 0, void 0, function* () {
     // Ensure attachments is always an array
     if (!Array.isArray(payload.attachments)) {
         payload.attachments = [];
     }
+    // Authorization: sender must be a participant of the chat
+    const isParticipant = yield chat_model_1.Chat.exists({
+        _id: payload === null || payload === void 0 ? void 0 : payload.chatId,
+        participants: payload === null || payload === void 0 ? void 0 : payload.sender,
+    });
+    if (!isParticipant) {
+        throw new ApiError_1.default(http_status_codes_1.StatusCodes.FORBIDDEN, 'You are not a participant of this chat');
+    }
     // save to DB
     const response = yield message_model_1.Message.create(payload);
     //@ts-ignore
     const io = global.io;
     if (io) {
-        // Backward-compat global event
-        io.emit(`getMessage::${payload === null || payload === void 0 ? void 0 : payload.chatId}`, response);
         // Room-based event for chat participants
         io.to(`chat::${String(payload === null || payload === void 0 ? void 0 : payload.chatId)}`).emit('MESSAGE_SENT', {
-            messageId: String(response._id),
-            chatId: String(response.chatId),
-            sender: String(response.sender),
-            text: response.text,
-            type: response.type,
-            attachments: response.attachments,
-            createdAt: response.createdAt,
+            message: response,
         });
     }
     // Offline notification triggers
@@ -51,6 +52,13 @@ const sendMessageToDB = (payload) => __awaiter(void 0, void 0, void 0, function*
             .map(p => String(p))
             .filter(Boolean);
         const receivers = participants.filter(p => String(p) !== String(response.sender));
+        // Increment unread count for receivers
+        for (const receiverId of receivers) {
+            try {
+                yield (0, unreadHelper_1.incrementUnreadCount)(String(response.chatId), String(receiverId), 1);
+            }
+            catch (_a) { }
+        }
         for (const receiverId of receivers) {
             const online = yield (0, presenceHelper_1.isOnline)(receiverId);
             if (!online) {
@@ -83,8 +91,9 @@ const getMessageFromDB = (user, id, query) => __awaiter(void 0, void 0, void 0, 
         .fields();
     // Fetch messages
     let messages = yield queryBuilder.modelQuery;
-    // Reverse messages so that oldest is first if your UI appends messages top -> bottom
-    messages = messages.reverse();
+    // Explicitly sort by createdAt ASC for predictable ordering
+    messages = messages.sort((a, b) => new Date(a === null || a === void 0 ? void 0 : a.createdAt).getTime() -
+        new Date(b === null || b === void 0 ? void 0 : b.createdAt).getTime());
     // Get pagination info
     const pagination = yield queryBuilder.getPaginationInfo();
     // Fetch the chat participant (exclude the logged-in user)
@@ -134,6 +143,11 @@ const markChatAsRead = (chatId, userId) => __awaiter(void 0, void 0, void 0, fun
             });
         }
     }
+    // Reset unread count cache for this user on this chat
+    try {
+        yield (0, unreadHelper_1.setUnreadCount)(String(chatId), String(userId), 0);
+    }
+    catch (_a) { }
     return { modifiedCount: toUpdate.length, updatedIds: toUpdate.map(m => String(m._id)) };
 });
 const getUnreadCount = (chatId, userId) => __awaiter(void 0, void 0, void 0, function* () {

@@ -42,7 +42,7 @@ const sendResponse_1 = __importDefault(require("../../../shared/sendResponse"));
 const ApiError_1 = __importDefault(require("../../../errors/ApiError"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const payment_service_1 = __importStar(require("./payment.service"));
-const stripeConnected_service_1 = require("./stripeConnected.service");
+const stripeConnect_service_1 = require("./stripeConnect.service");
 // Get current intent (and client_secret if applicable) by bidId
 exports.getCurrentIntentByBidController = (0, catchAsync_1.default)((req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { bidId } = req.params;
@@ -140,7 +140,7 @@ exports.getPaymentStatsController = (0, catchAsync_1.default)((_req, res) => __a
 }));
 const deleteStripeAccountController = (0, catchAsync_1.default)((req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { accountId } = req.params;
-    const deletedAccount = yield (0, stripeConnected_service_1.deleteStripeAccountService)(accountId);
+    const deletedAccount = yield (0, stripeConnect_service_1.deleteStripeAccountService)(accountId);
     (0, sendResponse_1.default)(res, {
         statusCode: http_status_1.default.OK,
         success: true,

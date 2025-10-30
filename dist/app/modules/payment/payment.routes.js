@@ -9,15 +9,15 @@ const payment_controller_1 = __importDefault(require("./payment.controller"));
 const webhook_controller_1 = __importDefault(require("./webhook.controller"));
 const auth_1 = __importDefault(require("../../middlewares/auth"));
 const user_1 = require("../../../enums/user");
-const stripeConnected_controller_1 = require("./stripeConnected.controller");
+const stripeConnect_controller_1 = require("./stripeConnect.controller");
 const router = express_1.default.Router();
 // Webhook routes (no authentication required)
 // Note: Raw body parsing is handled at app level for webhook routes
 router.post('/webhook', webhook_controller_1.default.handleStripeWebhook);
 // Stripe Connect account management
-router.post('/stripe/account', (0, auth_1.default)(user_1.USER_ROLES.TASKER), stripeConnected_controller_1.StripeConnectedController.createStripeAccountController);
-router.get('/stripe/onboarding', (0, auth_1.default)(user_1.USER_ROLES.TASKER, user_1.USER_ROLES.SUPER_ADMIN), stripeConnected_controller_1.StripeConnectedController.getOnboardingLinkController);
-router.get('/stripe/onboarding-status', (0, auth_1.default)(user_1.USER_ROLES.TASKER, user_1.USER_ROLES.POSTER, user_1.USER_ROLES.SUPER_ADMIN), stripeConnected_controller_1.StripeConnectedController.checkOnboardingStatusController);
+router.post('/stripe/account', (0, auth_1.default)(user_1.USER_ROLES.TASKER), stripeConnect_controller_1.StripeConnectController.createStripeAccountController);
+router.get('/stripe/onboarding', (0, auth_1.default)(user_1.USER_ROLES.TASKER, user_1.USER_ROLES.SUPER_ADMIN), stripeConnect_controller_1.StripeConnectController.getOnboardingLinkController);
+router.get('/stripe/onboarding-status', (0, auth_1.default)(user_1.USER_ROLES.TASKER, user_1.USER_ROLES.POSTER, user_1.USER_ROLES.SUPER_ADMIN), stripeConnect_controller_1.StripeConnectController.checkOnboardingStatusController);
 // Payment history route for poster, tasker, super admin
 router.get('/history', (0, auth_1.default)(user_1.USER_ROLES.POSTER, user_1.USER_ROLES.TASKER, user_1.USER_ROLES.SUPER_ADMIN), payment_controller_1.default.getPaymentHistoryController);
 // Retrieve current intent and client_secret by bidId

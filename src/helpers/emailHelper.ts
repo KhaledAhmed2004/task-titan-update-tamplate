@@ -1,7 +1,12 @@
 import nodemailer from 'nodemailer';
 import config from '../config';
 import { errorLogger, logger } from '../shared/logger';
-import { ISendEmail } from '../types/email';
+
+type ISendEmail = {
+  to: string;
+  subject: string;
+  html: string;
+};
 
 const transporter = nodemailer.createTransport({
   host: config.email.host,

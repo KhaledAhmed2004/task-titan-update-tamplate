@@ -12,13 +12,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.StripeConnectedController = void 0;
+exports.StripeConnectController = void 0;
 const http_status_1 = __importDefault(require("http-status"));
 const ApiError_1 = __importDefault(require("../../../errors/ApiError"));
-const stripeConnected_service_1 = require("./stripeConnected.service");
 const payment_service_1 = require("./payment.service");
 const sendResponse_1 = __importDefault(require("../../../shared/sendResponse"));
 const catchAsync_1 = __importDefault(require("../../../shared/catchAsync"));
+const stripeConnect_service_1 = __importDefault(require("./stripeConnect.service"));
 const createStripeAccountController = (0, catchAsync_1.default)((req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const user = req.user;
     const userId = user.id;
@@ -26,7 +26,7 @@ const createStripeAccountController = (0, catchAsync_1.default)((req, res) => __
     if (!userId || !accountType) {
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'User ID and account type are required');
     }
-    const result = yield (0, stripeConnected_service_1.createStripeAccount)({ userId, accountType });
+    const result = yield stripeConnect_service_1.default.createStripeAccount({ userId, accountType });
     (0, sendResponse_1.default)(res, {
         success: true,
         statusCode: http_status_1.default.CREATED,
@@ -40,7 +40,7 @@ const getOnboardingLinkController = (0, catchAsync_1.default)((req, res) => __aw
     if (!userId) {
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'User ID is required');
     }
-    const onboardingUrl = yield (0, stripeConnected_service_1.createOnboardingLink)(userId);
+    const onboardingUrl = yield stripeConnect_service_1.default.createOnboardingLink(userId);
     (0, sendResponse_1.default)(res, {
         success: true,
         statusCode: http_status_1.default.OK,
@@ -57,7 +57,7 @@ const checkOnboardingStatusController = (0, catchAsync_1.default)((req, res) => 
     if (!userId) {
         throw new ApiError_1.default(http_status_1.default.BAD_REQUEST, 'User ID is required');
     }
-    const status = yield (0, stripeConnected_service_1.checkOnboardingStatus)(userId);
+    const status = yield stripeConnect_service_1.default.checkOnboardingStatus(userId);
     (0, sendResponse_1.default)(res, {
         success: true,
         statusCode: http_status_1.default.OK,
@@ -78,7 +78,7 @@ const handleStripeWebhookController = (0, catchAsync_1.default)((req, res) => __
         message: 'Webhook processed successfully',
     });
 }));
-exports.StripeConnectedController = {
+exports.StripeConnectController = {
     createStripeAccountController,
     getOnboardingLinkController,
     checkOnboardingStatusController,
